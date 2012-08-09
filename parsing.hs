@@ -24,53 +24,57 @@ parseAnidb input = parse anidbReply "(unknown)" input
 -- {opt error message str}\n
 --
 -- Sample (assuming all can have compression and tag) header:
--- 500 LOGIN FAILED 
---
--- 504 CLIENT BANNED - {str reason}
--- 6xx INTERNAL SERVER ERROR - {str errormessage} 
---
--- 209 {str salt} ENCRYPTION ENABLED 
---
 -- 200 {str session_key} LOGIN ACCEPTED
--- 201 {str session_key} LOGIN ACCEPTED - NEW VERSION AVAILABLE 
+-- 201 {str session_key} LOGIN ACCEPTED - NEW VERSION AVAILABLE
 --
 -- With NAT enabled - (ipv4 for now...)
 -- 200 {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED
 -- 201 {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - blah
+--
+-- With imgServer enabled - Context/connection dependent
+-- 200 {str session_key} LOGIN ACCEPTED
+-- {str image server name}
+--
+-- 201 {str session_key} LOGIN ACCEPTED - NEW VERSION AVAILABLE
+-- {str image server name}
+--
+-- 500 LOGIN FAILED
+--
+-- 504 CLIENT BANNED - {str reason}
+--
+-- 209 {str salt} ENCRYPTION ENABLED
 --
 --
 -- Sample headers with known no data section, thus can parse next line:
 -- 555 BANNED
 -- {str reason}
 --
--- 6xx INTERNAL SERVER ERROR 
--- ERROR: {str errormessage} 
+-- 998 VERSION
+-- {str server version}
 --
--- 300 PONG 
--- {int4 port} (when nat=1) 
+-- 208 UPTIME
+-- {int4 udpserver uptime in milliseconds}
 --
--- 998 VERSION 
--- {str server version} 
+-- 300 PONG
+-- {int4 port} (when nat=1)
 --
--- 208 UPTIME 
--- {int4 udpserver uptime in milliseconds} 
 --
--- With imgServer enabled - Context/connection dependent
--- 200 {str session_key} LOGIN ACCEPTED 
--- {str image server name}
+-- 6xx INTERNAL SERVER ERROR
+-- ERROR: {str errormessage}
 --
--- 201 {str session_key} LOGIN ACCEPTED - NEW VERSION AVAILABLE 
--- {str image server name} 
+-- 6xx INTERNAL SERVER ERROR - {str errormessage}
 --
 --
 -- Probably unsupported headers:
--- 253 {int2 start} {int2 end} {int2 total} BUDDY LIST 
+-- 253 {int2 start} {int2 end} {int2 total} BUDDY LIST
 -- 254 {int2 start} {int2 end} {int2 total} BUDDY STATE
--- 
+-- 720 {int4 notify_packet_id} NOTIFICATION - NEW FILE
+-- 794 {int4 notify_packet_id} NOTIFICATION - NEW MESSAGE
+--
 --
 --
 -- Data section:
--- {data field 0}|{data field 1}|...|{data field n} 
+-- {data field 0}|{data field 1}|...|{data field n}
 --
 
 -- A reply is composited of a header and sometime follow on data
@@ -79,22 +83,31 @@ anidbReply = do
     result <- headers
     dataz <- many line
     eof
-    return ([result] ++ dataz)
+    return (result ++ dataz)
 
-headers :: GenParser Char st [String]
+headers :: GenParser Char st [[String]]
 headers = do
     comp <- compression
     aTag <- tag
     return_code <- returnCode
-    char ' '
-    return_string <- returnString
-    eol
-    return [show comp, aTag, show return_code, return_string]
+    -- Dumb case for now
+    return_string <-
+        (case return_code of
+            200 -> loginString
+            201 -> loginString
+            209 -> encryptionString
+            555 -> infoString
+            998 -> infoString
+            208 -> infoString
+            300 -> infoString
+            _   -> defaultString)
+    eoh
+    return [[show comp], [aTag], [show return_code], return_string]
 
 -- For now just return true/false but i would like to "decompress"
 -- the remaining data and then feed it back into the parser
 compression :: GenParser Char st Bool
-compression = 
+compression =
     (string "00" >> return True)
     <|> (return False)
 
@@ -105,20 +118,99 @@ compression =
 tag :: GenParser Char st String
 tag = do
         a <- many (noneOf " 0123456789")
-        char ' '
+        skipMany space
         return a
     <|> (return "")
 
 returnCode :: GenParser Char st Integer
-returnCode = do 
+returnCode = do
     ds <- count 3 digit
     return $ read ds
 
-returnString :: GenParser Char st String
-returnString = many (noneOf "\n")
+-- 555 BANNED
+-- {str reason}
+--
+-- 998 VERSION
+-- {str server version}
+--
+-- 208 UPTIME
+-- {int4 udpserver uptime in milliseconds}
+--
+-- 300 PONG
+-- {int4 port} (when nat=1)
+infoString :: GenParser Char st [String]
+infoString = do
+    skipMany space
+    msg <- defaultString
+    -- Mandatory/optional data
+    hdata <- headerData
+    return $ msg ++ [hdata]
+
+
+-- 209 {str salt} ENCRYPTION ENABLED
+encryptionString :: GenParser Char st [String]
+encryptionString = do
+    skipMany space
+    salt <- many1 (noneOf " ")
+    msg <- defaultString
+    return $ [salt] ++ msg
+
+
+-- 20[01] {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - blah
+-- {str image server name}
+loginString :: GenParser Char st [String]
+loginString = do
+    skipMany space
+    session <- many1 alphaNum
+    skipMany space
+
+    -- the ip:port is optional
+    (ip, port) <- ipPort
+
+    skipMany space
+    msg <- defaultString
+
+    -- Optional img server
+    imgsrv <- headerData
+
+    return $ [session, ip, port] ++ msg ++ [imgsrv]
+
+headerData :: GenParser Char st String
+headerData = try (do
+        char '\n'
+        srv <- many1 (noneOf "|\n")
+        return srv)
+    <|> (return "")
+
+
+-- Parse the ip:port out otherwise return empty strings
+ipPort :: GenParser Char st (String, String)
+ipPort = try (do
+        ip <- many1 (noneOf ":")
+        char ':'
+        port <- many1 (noneOf " ")
+        return (ip, port))
+    <|> (return ("", ""))
+
+
+-- 500 LOGIN FAILED
+--
+-- 504 CLIENT BANNED - {str reason}
+-- 6xx INTERNAL SERVER ERROR - {str errormessage}
+defaultString :: GenParser Char st [String]
+defaultString = do
+    skipMany space
+    codeString <- many1 (noneOf "-\n")
+    codeExtra <- option "" (char '-' >> skipMany space >> many (noneOf "\n"))
+
+    -- Fix this init, check if last space is whitespace and drop, otherwise dont
+    return [init codeString, codeExtra]
 
 eol :: GenParser Char st Char
 eol = char '\n'
+
+eoh :: GenParser Char st Char
+eoh = char '\n' <|> char '|'
 
 line :: GenParser Char st [String]
 line = do
@@ -139,3 +231,22 @@ remainingItem =
 
 itemContent :: GenParser Char st String
 itemContent = many (noneOf "|\n")
+
+
+
+-- Currently unused
+ip :: GenParser Char st String
+ip = do { a1 <- decOctet; char '.'
+        ; a2 <- decOctet; char '.'
+        ; a3 <- decOctet; char '.'
+        ; a4 <- decOctet
+        ; return $ a1++"."++a2++"."++a3++"."++a4
+        }
+
+decOctet :: GenParser Char st String
+decOctet = do
+    a1 <- many1 digit
+    if (read a1 :: Integer) > 255 then
+        fail "Decimal ocet value too large"
+    else
+        return a1
