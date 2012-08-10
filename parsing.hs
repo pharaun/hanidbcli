@@ -1,8 +1,27 @@
 -- Basic Anidb parser
+import Data.String.Utils (strip)
 import Text.ParserCombinators.Parsec
+import qualified Codec.Binary.UTF8.String as U
+import qualified Codec.Compression.Zlib as Z
+import qualified Data.ByteString.Lazy as B
 
-parseAnidb :: String -> Either ParseError [[String]]
-parseAnidb input = parse anidbReply "(unknown)" input
+
+parseAnidb :: B.ByteString -> Either ParseError [[String]]
+parseAnidb inputData =
+        parse anidbReply "(unknown)" $ U.decode $ B.unpack paddedInput
+    where
+        input = if (B.take 2 inputData == B.pack [0,0]) then (Z.decompress $ B.drop 2 inputData) else (inputData)
+        -- TODO: This is not very nice, proably nicer if we just flatout append newline, and have parser skip/nom on newline
+        paddedInput = if ((B.pack [10]) `B.isSuffixOf` input) then (input) else (input`B.append` (B.pack [10])) -- [10] == \n
+
+testString :: String
+testString = "dadsf 201 JasdSf 10.0.1.123:233 LOGIN ACCEPTED - NEW VERSION AVAILABLE\nanidb.imgserver.com|testdata|dadf\n"
+
+testEncode :: String -> B.ByteString
+testEncode = B.pack . U.encode
+
+testComp :: String -> B.ByteString
+testComp input = B.pack [0,0] `B.append` (Z.compress $ testEncode input)
 
 -- Protocol defination
 --
@@ -87,45 +106,41 @@ anidbReply = do
 
 headers :: GenParser Char st [[String]]
 headers = do
-    comp <- compression
-    aTag <- tag
-    return_code <- returnCode
-    -- Dumb case for now
-    return_string <-
-        (case return_code of
-            200 -> loginString
-            201 -> loginString
-            209 -> encryptionString
-            555 -> infoString
-            998 -> infoString
-            208 -> infoString
-            300 -> infoString
-            _   -> defaultString)
+    (aTag, return_code) <- tagAndReturnCode
+    returnString <- remainingHeaders return_code
     eoh
-    return [[show comp], [aTag], [show return_code], return_string]
+    return [[aTag], [show return_code], returnString]
 
--- For now just return true/false but i would like to "decompress"
--- the remaining data and then feed it back into the parser
-compression :: GenParser Char st Bool
-compression =
-    (string "00" >> return True)
-    <|> (return False)
 
--- For now assume no limitation in length of tag
--- Need to tweak it so it can accept digits in the string
--- if i don't exclude digits it will eat up the return code if
--- the tag does not exist
-tag :: GenParser Char st String
-tag = do
-        a <- many (noneOf " 0123456789")
+tagAndReturnCode :: GenParser Char st (String, Integer)
+tagAndReturnCode = try (do
+        tag <- many1 (noneOf " ")
         skipMany space
-        return a
-    <|> (return "")
+        rc <- returnCode
+        return (tag, rc))
+    <|> (do
+            rc <- returnCode
+            return ("", rc))
 
 returnCode :: GenParser Char st Integer
 returnCode = do
     ds <- count 3 digit
     return $ read ds
+
+
+remainingHeaders :: Integer -> GenParser Char st [String]
+remainingHeaders 200 = loginString
+remainingHeaders 201 = loginString
+remainingHeaders 208 = infoString
+remainingHeaders 209 = encryptionString
+remainingHeaders 300 = infoString
+remainingHeaders 555 = infoString
+remainingHeaders 998 = infoString
+remainingHeaders n
+         | n > 599   = defaultString -- TODO: Implement a special 6xx handler
+         | n < 699   = defaultString
+         | otherwise = defaultString
+
 
 -- 555 BANNED
 -- {str reason}
@@ -200,17 +215,15 @@ ipPort = try (do
 defaultString :: GenParser Char st [String]
 defaultString = do
     skipMany space
-    codeString <- many1 (noneOf "-\n")
-    codeExtra <- option "" (char '-' >> skipMany space >> many (noneOf "\n"))
+    foo <- (many1 (noneOf "-\n")) `sepBy1` string "-"
+    return $ strip `map` foo
 
-    -- Fix this init, check if last space is whitespace and drop, otherwise dont
-    return [init codeString, codeExtra]
 
 eol :: GenParser Char st Char
 eol = char '\n'
 
 eoh :: GenParser Char st Char
-eoh = char '\n' <|> char '|'
+eoh = eol <|> char '|'
 
 line :: GenParser Char st [String]
 line = do
