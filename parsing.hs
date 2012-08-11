@@ -23,6 +23,35 @@ testEncode = B.pack . U.encode
 testComp :: String -> B.ByteString
 testComp input = B.pack [0,0] `B.append` (Z.compress $ testEncode input)
 
+-- Data/type
+data AniReply = AniReply { -- Probably can just merge the header and this together into one data type to simpify things
+    rHeader :: AniHeader
+    , rData :: Maybe String -- TODO: Can probably have a more detailed type here, but for now just dump the whole data lines in this
+} deriving (Show)
+
+data AniHeader = AniHeader {
+    hTag :: Maybe String
+    , hReturnCode :: Integer
+
+    , hMessage :: String
+    , hExtraMessage :: Maybe String -- 555 BANNED {str reason}, Error string, etc...
+
+    , hData :: Maybe AniHeaderData
+} deriving (Show)
+
+data AniHeaderData =
+    AniHeaderSalt String |
+    AniHeaderVersion String |
+    AniHeaderUptime Integer |
+    AniHeaderPort Integer | -- Not for sure if we want this or not because its a "stateful" (depends on matching to tag for send parms)
+    AniHeaderSession {
+        adSession :: String
+        , adIP :: Maybe String
+        , adPort :: Maybe Integer
+        , adImgSrv :: Maybe String
+    } -- TODO: can add 2 more HeaderData (Buddy list stuff, and notification)
+    deriving (Show)
+
 -- Protocol defination
 --
 -- opt - optional
