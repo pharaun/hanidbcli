@@ -1,10 +1,10 @@
 -- Basic Anidb parser
-import Data.String.Utils (strip)
+import Data.Char (isSpace)
+import Data.Maybe (fromJust)
 import Text.ParserCombinators.Parsec
 import qualified Codec.Binary.UTF8.String as U
 import qualified Codec.Compression.Zlib as Z
 import qualified Data.ByteString.Lazy as B
-import Data.Maybe (fromJust)
 
 
 parseAnidb :: B.ByteString -> Either ParseError AniReply
@@ -168,11 +168,11 @@ remainingHeaders 201 = loginString
 remainingHeaders 208 = infoString 208
 remainingHeaders 209 = encryptionString
 remainingHeaders 300 = infoString 300
-remainingHeaders 555 = defaultStringWrapper
+remainingHeaders 555 = internalError
 remainingHeaders 998 = infoString 998
 remainingHeaders n
-         | n > 599   = defaultStringWrapper -- TODO: Implement a special 6xx handler
-         | n < 699   = defaultStringWrapper
+         | n > 599   = internalError
+         | n < 700   = internalError
          | otherwise = defaultStringWrapper
 
 
@@ -251,23 +251,37 @@ ipPort = try (do
 -- 555 BANNED
 -- {str reason}
 --
--- 500 LOGIN FAILED
---
--- 504 CLIENT BANNED - {str reason}
 -- 6xx INTERNAL SERVER ERROR - {str errormessage}
 -- 6xx INTERNAL SERVER ERROR
 -- ERROR: {str errormessage}
+internalError :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
+internalError = do
+    skipMany space
+    msg <- many1 (noneOf "-\n")
+
+    err <- try (char '-' >> skipMany space >> many1 (noneOf "\n"))
+            <|> (char '\n' >> many1 (noneOf "|\n"))
+
+    return (trimRight msg, Just err, Nothing)
+
+--
+-- 500 LOGIN FAILED
+-- 504 CLIENT BANNED - {str reason}
 defaultString :: GenParser Char st (String, Maybe String)
 defaultString = do
     skipMany space
     foo <- (many1 (noneOf "-\n")) `sepBy1` string "-"
 --    return $ strip `map` foo
-    return ("test", Nothing)
+    return ("test", Nothing) -- TODO: improve this to rtrim the space and break it up properly
 
 defaultStringWrapper :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 defaultStringWrapper = do
     (msg, extraMsg) <- defaultString
     return (msg, extraMsg, Nothing)
+
+trimRight :: String -> String
+trimRight str | all isSpace str = ""
+trimRight (c : cs) = c : trimRight cs
 
 
 eol :: GenParser Char st Char
