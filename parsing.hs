@@ -4,9 +4,10 @@ import Text.ParserCombinators.Parsec
 import qualified Codec.Binary.UTF8.String as U
 import qualified Codec.Compression.Zlib as Z
 import qualified Data.ByteString.Lazy as B
+import Data.Maybe (fromJust)
 
 
-parseAnidb :: B.ByteString -> Either ParseError [[String]]
+parseAnidb :: B.ByteString -> Either ParseError AniReply
 parseAnidb inputData =
         parse anidbReply "(unknown)" $ U.decode $ B.unpack paddedInput
     where
@@ -124,32 +125,36 @@ data AniHeaderData =
 -- Data section:
 -- {data field 0}|{data field 1}|...|{data field n}
 --
+-- Take the bitflag, then bitshift it one by one and return something like
+-- [Nothing, Nothing, data, data] for 0011 (bitshift)
+--
 
 -- A reply is composited of a header and sometime follow on data
-anidbReply :: GenParser Char st [[String]]
+anidbReply :: GenParser Char st AniReply
 anidbReply = do
     result <- headers
     dataz <- many line
     eof
-    return (result ++ dataz)
+    return $ AniReply result $ Just $ unwords $ concat dataz
 
-headers :: GenParser Char st [[String]]
+
+headers :: GenParser Char st AniHeader
 headers = do
     (aTag, return_code) <- tagAndReturnCode
-    returnString <- remainingHeaders return_code
+    (returnString, extraMessage, aniExtraData) <- remainingHeaders return_code
     eoh
-    return [[aTag], [show return_code], returnString]
+    return $ AniHeader aTag return_code returnString extraMessage aniExtraData
 
 
-tagAndReturnCode :: GenParser Char st (String, Integer)
+tagAndReturnCode :: GenParser Char st (Maybe String, Integer)
 tagAndReturnCode = try (do
         tag <- many1 (noneOf " ")
         skipMany space
         rc <- returnCode
-        return (tag, rc))
+        return (Just tag, rc))
     <|> (do
             rc <- returnCode
-            return ("", rc))
+            return (Nothing, rc))
 
 returnCode :: GenParser Char st Integer
 returnCode = do
@@ -157,23 +162,20 @@ returnCode = do
     return $ read ds
 
 
-remainingHeaders :: Integer -> GenParser Char st [String]
+remainingHeaders :: Integer -> GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 remainingHeaders 200 = loginString
 remainingHeaders 201 = loginString
-remainingHeaders 208 = infoString
+remainingHeaders 208 = infoString 208
 remainingHeaders 209 = encryptionString
-remainingHeaders 300 = infoString
-remainingHeaders 555 = infoString
-remainingHeaders 998 = infoString
+remainingHeaders 300 = infoString 300
+remainingHeaders 555 = defaultStringWrapper
+remainingHeaders 998 = infoString 998
 remainingHeaders n
-         | n > 599   = defaultString -- TODO: Implement a special 6xx handler
-         | n < 699   = defaultString
-         | otherwise = defaultString
+         | n > 599   = defaultStringWrapper -- TODO: Implement a special 6xx handler
+         | n < 699   = defaultStringWrapper
+         | otherwise = defaultStringWrapper
 
 
--- 555 BANNED
--- {str reason}
---
 -- 998 VERSION
 -- {str server version}
 --
@@ -182,27 +184,35 @@ remainingHeaders n
 --
 -- 300 PONG
 -- {int4 port} (when nat=1)
-infoString :: GenParser Char st [String]
-infoString = do
+infoString :: Integer -> GenParser Char st (String, Maybe String, Maybe AniHeaderData)
+infoString return_code = do
     skipMany space
-    msg <- defaultString
+    (msg, extraMsg) <- defaultString
     -- Mandatory/optional data
     hdata <- headerData
-    return $ msg ++ [hdata]
+
+    case return_code of
+        208 -> return (msg, extraMsg, Just $ AniHeaderUptime $ read $ fromJust hdata)
+        300 -> return (msg, extraMsg, handlePong hdata)
+        998 -> return (msg, extraMsg, Just $ AniHeaderVersion $ fromJust hdata)
+    where
+        handlePong :: (Maybe String) -> Maybe AniHeaderData
+        handlePong Nothing = Nothing
+        handlePong (Just a) = Just $ AniHeaderPort $ read a
 
 
 -- 209 {str salt} ENCRYPTION ENABLED
-encryptionString :: GenParser Char st [String]
+encryptionString :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 encryptionString = do
     skipMany space
     salt <- many1 (noneOf " ")
-    msg <- defaultString
-    return $ [salt] ++ msg
+    (msg, extraMsg) <- defaultString
+    return (msg, extraMsg, Just $ AniHeaderSalt salt)
 
 
 -- 20[01] {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - blah
 -- {str image server name}
-loginString :: GenParser Char st [String]
+loginString :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 loginString = do
     skipMany space
     session <- many1 alphaNum
@@ -212,40 +222,52 @@ loginString = do
     (ip, port) <- ipPort
 
     skipMany space
-    msg <- defaultString
+    (msg, extraMsg) <- defaultString
 
     -- Optional img server
     imgsrv <- headerData
 
-    return $ [session, ip, port] ++ msg ++ [imgsrv]
+    return (msg, extraMsg, Just $ AniHeaderSession session ip port imgsrv)
 
-headerData :: GenParser Char st String
+
+headerData :: GenParser Char st (Maybe String)
 headerData = try (do
         char '\n'
         srv <- many1 (noneOf "|\n")
-        return srv)
-    <|> (return "")
+        return $ Just srv)
+    <|> (return Nothing)
 
 
 -- Parse the ip:port out otherwise return empty strings
-ipPort :: GenParser Char st (String, String)
+ipPort :: GenParser Char st (Maybe String, Maybe Integer)
 ipPort = try (do
         ip <- many1 (noneOf ":")
         char ':'
         port <- many1 (noneOf " ")
-        return (ip, port))
-    <|> (return ("", ""))
+        return (Just ip, Just $ read port))
+    <|> (return (Nothing, Nothing))
 
 
+-- 555 BANNED
+-- {str reason}
+--
 -- 500 LOGIN FAILED
 --
 -- 504 CLIENT BANNED - {str reason}
 -- 6xx INTERNAL SERVER ERROR - {str errormessage}
-defaultString :: GenParser Char st [String]
+-- 6xx INTERNAL SERVER ERROR
+-- ERROR: {str errormessage}
+defaultString :: GenParser Char st (String, Maybe String)
 defaultString = do
     skipMany space
     foo <- (many1 (noneOf "-\n")) `sepBy1` string "-"
-    return $ strip `map` foo
+--    return $ strip `map` foo
+    return ("test", Nothing)
+
+defaultStringWrapper :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
+defaultStringWrapper = do
+    (msg, extraMsg) <- defaultString
+    return (msg, extraMsg, Nothing)
 
 
 eol :: GenParser Char st Char
@@ -292,3 +314,28 @@ decOctet = do
         fail "Decimal ocet value too large"
     else
         return a1
+
+-- TODO: parse the data
+--
+-- 22:44:40 < edwardk> pharaun: example;  data Foo = Foo { _fooFlags :: Int64 }; makeLenses ''Foo; flag31 = fooFlags.bitAt 31
+-- 22:44:49 < edwardk> myFoo^.flag31
+-- 22:44:52 < edwardk> (using lens)
+-- 22:44:56 < edwardk> but you don't need lenses for this
+-- 22:45:34 < pharaun> that would work for getting the value of what each flag is, ie 0 vs 1
+-- 22:45:58 < edwardk> flag31 .~ True $ myFoo -- will let you update it as well
+-- 22:46:07 < pharaun> but in this case say i send "0b1010" as the flag, i will get back "data1|data3"
+-- 22:47:10 < edwardk> so what is the problem with that?
+-- 22:47:26 < pharaun> that will be useful for setting/getting the flag value :) i'll save that to my todo, but how would i like map between the flag and the 
+--      data in a useful manner. i was going to just bit shift through the flag - 0b1010, and return a list like [data1, Nothing, data3, Nothing[
+-- 22:47:35 < edwardk> IntMap YourData  pass around the data in that
+-- 22:48:07 < pharaun> oh so i pass around the returned data, then the flag, and do that kind of lens/map
+-- 22:48:11 < pharaun> to map from the flag to the data
+-- 22:48:19 < edwardk> yes
+-- 22:48:26 < edwardk> no 56 argument constructor need apply
+-- 22:48:30 < pharaun> yes
+-- 22:48:33 < pharaun> that's much better idea
+-- 22:49:14 < edwardk> you can read the elements of the map using the map lookup functions or Data.IntMap.Lens
+-- 22:49:16 < edwardk> e.g.
+-- 22:49:22 < edwardk> myMap^.at 31
+-- 22:49:30 < edwardk> will give you Nothing or Just the data
+--
