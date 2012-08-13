@@ -1,4 +1,10 @@
--- Basic Anidb parser
+module AniReplyParse
+    ( parseAnidb
+    , testString
+    , testEncode
+    , testComp
+    ) where
+
 import Data.Char (isSpace)
 import Data.Maybe (fromJust)
 import Text.ParserCombinators.Parsec
@@ -7,6 +13,7 @@ import qualified Codec.Compression.Zlib as Z
 import qualified Data.ByteString.Lazy as B
 
 
+-- Test scalfording code
 parseAnidb :: B.ByteString -> Either ParseError AniReply
 parseAnidb inputData =
         parse anidbReply "(unknown)" $ U.decode $ B.unpack paddedInput
@@ -23,6 +30,7 @@ testEncode = B.pack . U.encode
 
 testComp :: String -> B.ByteString
 testComp input = B.pack [0,0] `B.append` (Z.compress $ testEncode input)
+
 
 -- Data/type
 data AniReply = AniReply { -- Probably can just merge the header and this together into one data type to simpify things
@@ -44,7 +52,7 @@ data AniHeaderData =
     AniHeaderSalt String |
     AniHeaderVersion String |
     AniHeaderUptime Integer |
-    AniHeaderPort Integer | -- Not for sure if we want this or not because its a "stateful" (depends on matching to tag for send parms)
+    AniHeaderPort Integer |
     AniHeaderSession {
         adSession :: String
         , adIP :: Maybe String
@@ -133,9 +141,8 @@ data AniHeaderData =
 anidbReply :: GenParser Char st AniReply
 anidbReply = do
     result <- headers
-    dataz <- many line
-    eof
-    return $ AniReply result $ Just $ unwords $ concat dataz
+    dataz <- optionMaybe (many1 anyToken)
+    return $ AniReply result dataz
 
 
 headers :: GenParser Char st AniHeader
@@ -171,8 +178,7 @@ remainingHeaders 300 = infoString 300
 remainingHeaders 555 = internalError
 remainingHeaders 998 = infoString 998
 remainingHeaders n
-         | n > 599   = internalError
-         | n < 700   = internalError
+         | (n > 599 && n < 700)   = internalError
          | otherwise = defaultStringWrapper
 
 
@@ -270,46 +276,25 @@ internalError = do
 defaultString :: GenParser Char st (String, Maybe String)
 defaultString = do
     skipMany space
-    foo <- (many1 (noneOf "-\n")) `sepBy1` string "-"
---    return $ strip `map` foo
-    return ("test", Nothing) -- TODO: improve this to rtrim the space and break it up properly
-
+    msg <- many1 (noneOf "-\n")
+    extraMsg <- optionMaybe (char '-' >> skipMany space >> many1 (noneOf "\n"))
+    return (trimRight msg, extraMsg)
+    
 defaultStringWrapper :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 defaultStringWrapper = do
     (msg, extraMsg) <- defaultString
     return (msg, extraMsg, Nothing)
 
+
 trimRight :: String -> String
 trimRight str | all isSpace str = ""
 trimRight (c : cs) = c : trimRight cs
-
 
 eol :: GenParser Char st Char
 eol = char '\n'
 
 eoh :: GenParser Char st Char
 eoh = eol <|> char '|'
-
-line :: GenParser Char st [String]
-line = do
-    result <- item
-    eol
-    return result
-
-item :: GenParser Char st [String]
-item = do
-    first <- itemContent
-    next <- remainingItem
-    return (first : next)
-
-remainingItem :: GenParser Char st [String]
-remainingItem =
-    (char '|' >> item)
-    <|> (return [])
-
-itemContent :: GenParser Char st String
-itemContent = many (noneOf "|\n")
-
 
 
 -- Currently unused
