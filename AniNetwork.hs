@@ -2,6 +2,7 @@ module AniNetwork
     ( connect
     , disconnect
 
+    , auth
     , ping
     , version
     , uptime
@@ -9,6 +10,7 @@ module AniNetwork
     , defaultConf
     ) where
 
+import Control.Concurrent.MVar
 import Data.Maybe (fromJust, isJust)
 import Network.BSD (HostName)
 import Network.HTTP.Base (urlEncodeVars)
@@ -38,13 +40,18 @@ data AniNetState = AniNetState {
     , ansSocket :: AR.AniRawSocket
     -- TODO: add some mvars as needed probably
     -- such as rnd gen stuff, session/login/out stuff
+    , ansSession :: (MVar Session)
     }
+
+-- Session type
+type Session = String
 
 -- Setup connections
 connect :: AniNetConf -> IO AniNetState
 connect netcfg = do
     aniRawSocket <- AR.connect (anidbHostName netcfg) (show $ anidbPort netcfg)
-    return $ AniNetState netcfg aniRawSocket
+    newSession <- newEmptyMVar
+    return $ AniNetState netcfg aniRawSocket newSession
 
 disconnect :: AniNetState -> IO ()
 disconnect netState = AR.disconnect (ansSocket netState)
@@ -71,11 +78,8 @@ auth netState user pass nat imgserver =
 -- TODO: Take care of possible failure states
 ping :: AniNetState -> Bool -> IO B.ByteString
 ping netState nat =
-    (AR.sendReq (ansSocket netState) msg)
+    (AR.sendReq (ansSocket netState) $ genReq "PING" $ Just [NAT nat])
     >> AR.recvReply (ansSocket netState)
-    where
-        msg = if nat then genReq "PING" $ Just [NAT nat]
-            else genReq "PING" Nothing
 
 version :: AniNetState -> IO B.ByteString
 version netState =
@@ -84,7 +88,8 @@ version netState =
 
 uptime :: AniNetState -> IO B.ByteString
 uptime netState =
-    (AR.sendReq (ansSocket netState) $ genReq "UPTIME" Nothing)
+    (readMVar (ansSession netState)) >>= (\s ->
+    (AR.sendReq (ansSocket netState) $ genReq "UPTIME" $ Just [SessionOpt s]))
     >> AR.recvReply (ansSocket netState)
 
 
@@ -109,6 +114,7 @@ genReq req (Just opt) = C.pack (req ++ " " ++ (urlEncodeVars $ optToStr opt))
         optStr (Compression True)   = Just ("comp", "1")
         optStr (Encode (Just x))    = Just ("enc", x)
         optStr (MTU (Just x))       = Just ("mtu", show x)
+        optStr (SessionOpt x)       = Just ("s", x)
         optStr _                    = Nothing
 
 
@@ -133,7 +139,7 @@ data RequestOpt =
                 | Compression Bool | Encode (Maybe String)
                 | MTU (Maybe Integer)
                 -- Session Management
-                | Session String
+                | SessionOpt Session
                 -- Tag
                 | Tag String
                 -- Encryption
