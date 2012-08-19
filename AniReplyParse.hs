@@ -61,6 +61,18 @@ data AniHeaderData =
     } -- TODO: can add 2 more HeaderData (Buddy list stuff, and notification)
     deriving (Show)
 
+--
+-- Sample data
+--
+-- *AniNetwork> version b
+-- "998 VERSION\n0.03.705 (2012-08-12)\n"
+--
+-- *AniNetwork> uptime b
+-- "501 LOGIN FIRST\n"
+--
+-- *AniNetwork> ping b True
+-- "300 PONG\n39728\n"
+--
 -- Protocol defination
 --
 -- opt - optional
