@@ -46,8 +46,8 @@ connect hostname port = do
     sock <- NS.socket (NS.addrFamily addrInfo) NS.Datagram NS.defaultProtocol
 
     -- Bind - TODO: make the port a config opt
-    localHost <- NS.inet_addr "0.0.0.0"
-    NS.bindSocket sock $ NS.SockAddrInet 10000 localHost
+--    localHost <- NS.inet_addr "0.0.0.0"
+--    NS.bindSocket sock $ NS.SockAddrInet 10000 localHost
 
     -- Connect
     NS.connect sock (NS.addrAddress addrInfo)
