@@ -1,5 +1,10 @@
 module AniReplyParse
     ( parseAnidb
+    , AniReply
+    , ParseError
+
+    , getSession
+
     , testString
     , testEncode
     , testComp
@@ -10,26 +15,32 @@ import Data.Maybe (fromJust)
 import Text.ParserCombinators.Parsec
 import qualified Codec.Binary.UTF8.String as U
 import qualified Codec.Compression.Zlib as Z
-import qualified Data.ByteString.Lazy as B
+import qualified Data.ByteString.Lazy as L
+
+-- Data extraction
+getSession :: (Either ParseError AniReply) -> Maybe String
+getSession (Left _)  = Nothing
+getSession (Right x) = getHdrSes (hData (rHeader x))
+    where
+        getHdrSes (Just AniHeaderSession{adSession=x}) = Just x
+        getHdrSes _ = Nothing
 
 
 -- Test scalfording code
-parseAnidb :: B.ByteString -> Either ParseError AniReply
+parseAnidb :: L.ByteString -> Either ParseError AniReply
 parseAnidb inputData =
-        parse anidbReply "(unknown)" $ U.decode $ B.unpack paddedInput
+        parse anidbReply "(unknown)" $ U.decode $ L.unpack input
     where
-        input = if (B.take 2 inputData == B.pack [0,0]) then (Z.decompress $ B.drop 2 inputData) else (inputData)
-        -- TODO: This is not very nice, proably nicer if we just flatout append newline, and have parser skip/nom on newline
-        paddedInput = if ((B.pack [10]) `B.isSuffixOf` input) then (input) else (input`B.append` (B.pack [10])) -- [10] == \n
+        input = if (L.take 2 inputData == L.pack [0,0]) then (Z.decompress $ L.drop 2 inputData) else (inputData)
 
 testString :: String
 testString = "dadsf 201 JasdSf 10.0.1.123:233 LOGIN ACCEPTED - NEW VERSION AVAILABLE\nanidb.imgserver.com|testdata|dadf\n"
 
-testEncode :: String -> B.ByteString
-testEncode = B.pack . U.encode
+testEncode :: String -> L.ByteString
+testEncode = L.pack . U.encode
 
-testComp :: String -> B.ByteString
-testComp input = B.pack [0,0] `B.append` (Z.compress $ testEncode input)
+testComp :: String -> L.ByteString
+testComp input = L.pack [0,0] `L.append` (Z.compress $ testEncode input)
 
 
 -- Data/type

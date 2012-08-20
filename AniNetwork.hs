@@ -15,7 +15,9 @@ import Data.Maybe (fromJust, isJust)
 import Network.BSD (HostName)
 import Network.HTTP.Base (urlEncodeVars)
 import qualified AniRawNetwork as AR
+import qualified AniReplyParse as AP
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Char8 as C
 
 -- configuration
@@ -40,11 +42,8 @@ data AniNetState = AniNetState {
     , ansSocket :: AR.AniRawSocket
     -- TODO: add some mvars as needed probably
     -- such as rnd gen stuff, session/login/out stuff
-    , ansSession :: (MVar Session)
+    , ansSession :: (MVar String)
     }
-
--- Session type
-type Session = String
 
 -- Setup connections
 connect :: AniNetConf -> IO AniNetState
@@ -56,12 +55,28 @@ connect netcfg = do
 disconnect :: AniNetState -> IO ()
 disconnect netState = AR.disconnect (ansSocket netState)
 
+-- Deal with recieving replies and parsing
+parseReply :: B.ByteString -> Either AP.ParseError AP.AniReply
+parseReply a = AP.parseAnidb $ L.fromChunks [a]
+
 -- Auth/Session command support
-auth :: AniNetState -> String -> String -> Bool -> Bool -> IO B.ByteString
-auth netState user pass nat imgserver =
-    (AR.sendReq (ansSocket netState) (genReq "AUTH" $ Just optList))
-    >> AR.recvReply (ansSocket netState)
+auth :: AniNetState -> String -> String -> Bool -> Bool -> IO (Either AP.ParseError AP.AniReply)
+auth netState user pass nat imgserver = do
+    AR.sendReq (ansSocket netState) (genReq "AUTH" $ Just optList)
+    reply <- AR.recvReply (ansSocket netState)
+    let parsedReply = parseReply reply
+
+    -- Write a new session
+    updateSession $ AP.getSession parsedReply
+
+    return parsedReply
+
     where
+        -- TODO: This is not txn safe at all
+        updateSession :: (Maybe String) -> IO ()
+        updateSession (Just x) = (tryTakeMVar (ansSession netState)) >> (putMVar (ansSession netState) x)
+        updateSession Nothing  = return ()
+
         cfg = ansConfig netState
         optList = [
             UserName user, Password pass,
@@ -73,24 +88,31 @@ auth netState user pass nat imgserver =
             (MTU $ clientMTU cfg),
             NAT nat, ImgServer imgserver]
 
+-- Logout
+logout :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
+logout netState =
+    (takeMVar (ansSession netState)) >>= (\s ->
+    (AR.sendReq (ansSocket netState) $ genReq "LOGOUT" $ Just [SessionOpt s]))
+    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
+
 -- Misc command support
 -- TODO: should take care of encoding
 -- TODO: Take care of possible failure states
-ping :: AniNetState -> Bool -> IO B.ByteString
-ping netState nat =
+ping :: AniNetState -> Bool -> IO (Either AP.ParseError AP.AniReply)
+ping netState nat = do
     (AR.sendReq (ansSocket netState) $ genReq "PING" $ Just [NAT nat])
-    >> AR.recvReply (ansSocket netState)
+    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
 
-version :: AniNetState -> IO B.ByteString
+version :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
 version netState =
     (AR.sendReq (ansSocket netState) $ genReq "VERSION" Nothing)
-    >> AR.recvReply (ansSocket netState)
+    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
 
-uptime :: AniNetState -> IO B.ByteString
+uptime :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
 uptime netState =
     (readMVar (ansSession netState)) >>= (\s ->
     (AR.sendReq (ansSocket netState) $ genReq "UPTIME" $ Just [SessionOpt s]))
-    >> AR.recvReply (ansSocket netState)
+    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
 
 
 -- Supporting code
@@ -139,7 +161,7 @@ data RequestOpt =
                 | Compression Bool | Encode (Maybe String)
                 | MTU (Maybe Integer)
                 -- Session Management
-                | SessionOpt Session
+                | SessionOpt String
                 -- Tag
                 | Tag String
                 -- Encryption
