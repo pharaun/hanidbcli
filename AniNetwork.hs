@@ -3,6 +3,7 @@ module AniNetwork
     , disconnect
 
     , auth
+    , logout
     , ping
     , version
     , uptime
