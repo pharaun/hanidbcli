@@ -143,8 +143,8 @@ genReq req (Just opt) = C.pack (req ++ " " ++ (urlEncodeVars $ optToStr opt))
 
 
 -- TODO: Wrap/add support for random generator
-genTag :: AniNetState -> String
-genTag netState = "TESTTAG"
+genTag :: String -> String
+genTag prevTag = undefined
 
 
 -- Test stuff here

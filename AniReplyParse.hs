@@ -25,6 +25,11 @@ getSession (Right x) = getHdrSes (hData (rHeader x))
         getHdrSes (Just AniHeaderSession{adSession=x}) = Just x
         getHdrSes _ = Nothing
 
+getTag :: (Either ParseError AniReply) -> Maybe String
+getTag (Left _)  = Nothing
+getTag (Right x) = hTag (rHeader x)
+
+
 
 -- Test scalfording code
 parseAnidb :: L.ByteString -> Either ParseError AniReply
