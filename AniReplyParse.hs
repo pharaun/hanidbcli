@@ -18,14 +18,14 @@ import qualified Codec.Compression.Zlib as Z
 import qualified Data.ByteString.Lazy as L
 
 -- Data extraction
-getSession :: (Either ParseError AniReply) -> Maybe String
+getSession :: Either ParseError AniReply -> Maybe String
 getSession (Left _)  = Nothing
 getSession (Right x) = getHdrSes (hData (rHeader x))
     where
         getHdrSes (Just AniHeaderSession{adSession=x}) = Just x
         getHdrSes _ = Nothing
 
-getTag :: (Either ParseError AniReply) -> Maybe String
+getTag :: Either ParseError AniReply -> Maybe String
 getTag (Left _)  = Nothing
 getTag (Right x) = hTag (rHeader x)
 
@@ -36,7 +36,7 @@ parseAnidb :: L.ByteString -> Either ParseError AniReply
 parseAnidb inputData =
         parse anidbReply "(unknown)" $ U.decode $ L.unpack input
     where
-        input = if (L.take 2 inputData == L.pack [0,0]) then (Z.decompress $ L.drop 2 inputData) else (inputData)
+        input = if L.take 2 inputData == L.pack [0,0] then Z.decompress $ L.drop 2 inputData else inputData
 
 testString :: String
 testString = "dadsf 201 JasdSf 10.0.1.123:233 LOGIN ACCEPTED - NEW VERSION AVAILABLE\nanidb.imgserver.com|testdata|dadf\n"
@@ -45,7 +45,7 @@ testEncode :: String -> L.ByteString
 testEncode = L.pack . U.encode
 
 testComp :: String -> L.ByteString
-testComp input = L.pack [0,0] `L.append` (Z.compress $ testEncode input)
+testComp input = L.pack [0,0] `L.append` Z.compress (testEncode input)
 
 
 -- Data/type
@@ -206,8 +206,8 @@ remainingHeaders 300 = infoString 300
 remainingHeaders 555 = internalError
 remainingHeaders 998 = infoString 998
 remainingHeaders n
-         | (n > 599 && n < 700)   = internalError
-         | otherwise = defaultStringWrapper
+         | n > 599 && n < 700 = internalError
+         | otherwise          = defaultStringWrapper
 
 
 -- 998 VERSION
@@ -230,7 +230,7 @@ infoString return_code = do
         300 -> return (msg, extraMsg, handlePong hdata)
         998 -> return (msg, extraMsg, Just $ AniHeaderVersion $ fromJust hdata)
     where
-        handlePong :: (Maybe String) -> Maybe AniHeaderData
+        handlePong :: Maybe String -> Maybe AniHeaderData
         handlePong Nothing = Nothing
         handlePong (Just a) = Just $ AniHeaderPort $ read a
 
@@ -269,7 +269,7 @@ headerData = try (do
         char '\n'
         srv <- many1 (noneOf "|\n")
         return $ Just srv)
-    <|> (return Nothing)
+    <|> return Nothing
 
 
 -- Parse the ip:port out otherwise return empty strings
@@ -279,7 +279,7 @@ ipPort = try (do
         char ':'
         port <- many1 (noneOf " ")
         return (Just ip, Just $ read port))
-    <|> (return (Nothing, Nothing))
+    <|> return (Nothing, Nothing)
 
 
 -- 555 BANNED

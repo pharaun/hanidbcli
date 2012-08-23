@@ -1,4 +1,4 @@
-﻿import AniReplyParse
+import AniReplyParse
 import AniNetwork
 
 main :: IO ()

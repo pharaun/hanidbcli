@@ -62,7 +62,7 @@ disconnect handle = NS.sClose (arSocket handle)
 -- TODO: Regulate how fast you can send a request by returning
 -- ok or error if its too fast.
 sendReq :: AniRawSocket -> B.ByteString -> IO ()
-sendReq handle msg = NSB.sendAll (arSocket handle) msg
+sendReq handle = NSB.sendAll (arSocket handle)
 
 recvReply :: AniRawSocket -> IO B.ByteString
 recvReply handle = NSB.recv (arSocket handle) 1500

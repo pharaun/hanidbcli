@@ -12,14 +12,15 @@ module AniNetwork
     ) where
 
 import Control.Concurrent.MVar
+import Data.Functor ((<$>))
 import Data.Maybe (fromJust, isJust)
 import Network.BSD (HostName)
 import Network.HTTP.Base (urlEncodeVars)
 import qualified AniRawNetwork as AR
 import qualified AniReplyParse as AP
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as L
 import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString.Lazy as L
 
 -- configuration
 data AniNetConf = AniNetConf {
@@ -44,6 +45,7 @@ data AniNetState = AniNetState {
     -- TODO: add some mvars as needed probably
     -- such as rnd gen stuff, session/login/out stuff
     , ansSession :: (MVar String)
+    , ansKey :: (MVar Int)
     }
 
 -- Setup connections
@@ -51,7 +53,8 @@ connect :: AniNetConf -> IO AniNetState
 connect netcfg = do
     aniRawSocket <- AR.connect (anidbHostName netcfg) (show $ anidbPort netcfg)
     newSession <- newEmptyMVar
-    return $ AniNetState netcfg aniRawSocket newSession
+    newKey <- newMVar 0
+    return $ AniNetState netcfg aniRawSocket newSession newKey
 
 disconnect :: AniNetState -> IO ()
 disconnect netState = AR.disconnect (ansSocket netState)
@@ -140,11 +143,28 @@ genReq req (Just opt) = C.pack (req ++ " " ++ (urlEncodeVars $ optToStr opt))
         optStr (SessionOpt x)       = Just ("s", x)
         optStr _                    = Nothing
 
+genTag :: AniNetState -> IO String
+genTag netState =
+    modifyMVar (ansKey netState) (\oldKey -> do
+        let newKey = if oldKey+1 >= cycleTime then 0 else oldKey+1
+        return (newKey, genTag' tagLength newKey))
+        where
+            tagLength = 4
+            cycleTime = length charOrder^tagLength
 
+genTag' :: Int -> Int -> String
+genTag' n x = (charOrder !!) <$> fapp n x
 
--- TODO: Wrap/add support for random generator
-genTag :: String -> String
-genTag prevTag = undefined
+fapp :: Int -> Int -> [Int]
+fapp n x = mod' <$> take n (iterate div' x)
+    where
+        len = length charOrder
+        mod' = flip mod len
+        div' = flip div len
+
+charOrder :: String
+charOrder = ['a'..'z'] ++ ['A'..'Z'] ++ ['1'..'9']
+
 
 
 -- Test stuff here
