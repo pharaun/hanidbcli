@@ -66,7 +66,8 @@ parseReply a = AP.parseAnidb $ L.fromChunks [a]
 -- Auth/Session command support
 auth :: AniNetState -> String -> String -> Bool -> Bool -> IO (Either AP.ParseError AP.AniReply)
 auth netState user pass nat imgserver = do
-    AR.sendReq (ansSocket netState) (genReq "AUTH" $ Just optList)
+    tag <- genTag netState
+    AR.sendReq (ansSocket netState) (genReq "AUTH" (Just $ optList tag))
     reply <- AR.recvReply (ansSocket netState)
     let parsedReply = parseReply reply
 
@@ -82,7 +83,7 @@ auth netState user pass nat imgserver = do
         updateSession Nothing  = return ()
 
         cfg = ansConfig netState
-        optList = [
+        optList tag = [
             UserName user, Password pass,
             (AniDBProtoVer $ anidbProtoVer cfg),
             (ClientVer $ clientVer cfg),
@@ -90,33 +91,43 @@ auth netState user pass nat imgserver = do
             (Compression $ clientCompress cfg),
             (Encode $ clientEncode cfg),
             (MTU $ clientMTU cfg),
-            NAT nat, ImgServer imgserver]
+            NAT nat, ImgServer imgserver,
+            Tag tag]
 
 -- Logout
 logout :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
-logout netState =
-    (takeMVar (ansSession netState)) >>= (\s ->
-    (AR.sendReq (ansSocket netState) $ genReq "LOGOUT" $ Just [SessionOpt s]))
-    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
+logout netState = do
+    s <- takeMVar (ansSession netState)
+    tag <- genTag netState
+    AR.sendReq (ansSocket netState) $ genReq "LOGOUT" $ Just [SessionOpt s, Tag tag]
+    reply <- AR.recvReply (ansSocket netState)
+    return $ parseReply reply
 
 -- Misc command support
 -- TODO: should take care of encoding
 -- TODO: Take care of possible failure states
 ping :: AniNetState -> Bool -> IO (Either AP.ParseError AP.AniReply)
 ping netState nat = do
-    (AR.sendReq (ansSocket netState) $ genReq "PING" $ Just [NAT nat])
-    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
+    tag <- genTag netState
+    AR.sendReq (ansSocket netState) $ genReq "PING" $ Just [NAT nat, Tag tag]
+    reply <- AR.recvReply (ansSocket netState)
+    return $ parseReply reply
 
 version :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
-version netState =
-    (AR.sendReq (ansSocket netState) $ genReq "VERSION" Nothing)
-    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
+version netState = do
+    tag <- genTag netState
+    AR.sendReq (ansSocket netState) $ genReq "VERSION" $ Just [Tag tag]
+    reply <- AR.recvReply (ansSocket netState)
+    return $ parseReply reply
 
 uptime :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
-uptime netState =
-    (readMVar (ansSession netState)) >>= (\s ->
-    (AR.sendReq (ansSocket netState) $ genReq "UPTIME" $ Just [SessionOpt s]))
-    >> (AR.recvReply (ansSocket netState)) >>= (\a -> return $ parseReply a)
+uptime netState = do
+    s <- readMVar (ansSession netState)
+    tag <- genTag netState
+    AR.sendReq (ansSocket netState) $ genReq "UPTIME" $ Just [SessionOpt s, Tag tag]
+    reply <- AR.recvReply (ansSocket netState)
+    return $ parseReply reply
+
 
 
 -- Supporting code
@@ -141,6 +152,7 @@ genReq req (Just opt) = C.pack (req ++ " " ++ (urlEncodeVars $ optToStr opt))
         optStr (Encode (Just x))    = Just ("enc", x)
         optStr (MTU (Just x))       = Just ("mtu", show x)
         optStr (SessionOpt x)       = Just ("s", x)
+        optStr (Tag x)              = Just ("tag", x)
         optStr _                    = Nothing
 
 genTag :: AniNetState -> IO String
