@@ -4,6 +4,7 @@ module AniReplyParse
     , ParseError
 
     , getSession
+    , getTag
 
     , testString
     , testEncode

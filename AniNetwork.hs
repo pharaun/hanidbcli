@@ -1,6 +1,7 @@
 module AniNetwork
     ( connect
     , disconnect
+    , processRecieved
 
     , auth
     , logout
@@ -11,6 +12,7 @@ module AniNetwork
     , defaultConf
     ) where
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 import Data.Functor ((<$>))
 import Data.Maybe (fromJust, isJust)
@@ -21,6 +23,7 @@ import qualified AniReplyParse as AP
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L
+import qualified Data.Map as M
 
 -- configuration
 data AniNetConf = AniNetConf {
@@ -42,10 +45,10 @@ data AniNetConf = AniNetConf {
 data AniNetState = AniNetState {
     ansConfig :: AniNetConf
     , ansSocket :: AR.AniRawSocket
-    -- TODO: add some mvars as needed probably
-    -- such as rnd gen stuff, session/login/out stuff
     , ansSession :: (MVar String)
     , ansKey :: (MVar Int)
+    -- Tag, data
+    , ansResult :: (MVar (M.Map String (MVar (Either AP.ParseError AP.AniReply))))
     }
 
 -- Setup connections
@@ -54,10 +57,47 @@ connect netcfg = do
     aniRawSocket <- AR.connect (anidbHostName netcfg) (show $ anidbPort netcfg)
     newSession <- newEmptyMVar
     newKey <- newMVar 0
-    return $ AniNetState netcfg aniRawSocket newSession newKey
+    newResult <- newMVar M.empty
+    return $ AniNetState netcfg aniRawSocket newSession newKey newResult
 
 disconnect :: AniNetState -> IO ()
 disconnect netState = AR.disconnect (ansSocket netState)
+
+
+-- Deal with processing the recieved packets
+processRecieved :: AniNetState -> IO ()
+processRecieved netState = do
+    reply <- AR.recvReply (ansSocket netState)
+    forkIO (notifySenderThread netState reply)
+    return ()
+
+notifySenderThread :: AniNetState -> B.ByteString -> IO ()
+notifySenderThread netState reply = do
+    let parsedReply = parseReply reply
+        tag = AP.getTag parsedReply
+
+    case tag of
+        Nothing  -> putStrLn ("No tag on reply: " ++ show parsedReply)
+        Just tag -> (modifyMVar_ (ansResult netState) (\m -> do
+                let dataMVar = M.lookup tag m
+                case dataMVar of
+                    Nothing -> putStrLn ("Tag does not exist: " ++ tag)
+                    Just x  -> putMVar x parsedReply
+
+                return (m)
+                ))
+    return ()
+
+storeTag :: AniNetState -> String -> IO (Either AP.ParseError AP.AniReply)
+storeTag netState tag = do
+    newTagMVar <- newEmptyMVar
+    modifyMVar_ (ansResult netState) (\m -> return (M.insert tag newTagMVar m))
+    takeMVar newTagMVar
+
+-- TODO: create a cleanup function to clean up dead tags after the thread
+-- retrieve the tag they care about back or just do it in the store Tag function
+-- above
+
 
 -- Deal with recieving replies and parsing
 parseReply :: B.ByteString -> Either AP.ParseError AP.AniReply
@@ -97,11 +137,12 @@ auth netState user pass nat imgserver = do
 -- Logout
 logout :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
 logout netState = do
+    -- TODO: this probably should not be blocking, it should just take and fail fast or
+    -- send a request to deauth
     s <- takeMVar (ansSession netState)
     tag <- genTag netState
     AR.sendReq (ansSocket netState) $ genReq "LOGOUT" $ Just [SessionOpt s, Tag tag]
-    reply <- AR.recvReply (ansSocket netState)
-    return $ parseReply reply
+    storeTag netState tag
 
 -- Misc command support
 -- TODO: should take care of encoding
@@ -110,23 +151,20 @@ ping :: AniNetState -> Bool -> IO (Either AP.ParseError AP.AniReply)
 ping netState nat = do
     tag <- genTag netState
     AR.sendReq (ansSocket netState) $ genReq "PING" $ Just [NAT nat, Tag tag]
-    reply <- AR.recvReply (ansSocket netState)
-    return $ parseReply reply
+    storeTag netState tag
 
 version :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
 version netState = do
     tag <- genTag netState
     AR.sendReq (ansSocket netState) $ genReq "VERSION" $ Just [Tag tag]
-    reply <- AR.recvReply (ansSocket netState)
-    return $ parseReply reply
+    storeTag netState tag
 
 uptime :: AniNetState -> IO (Either AP.ParseError AP.AniReply)
 uptime netState = do
     s <- readMVar (ansSession netState)
     tag <- genTag netState
     AR.sendReq (ansSocket netState) $ genReq "UPTIME" $ Just [SessionOpt s, Tag tag]
-    reply <- AR.recvReply (ansSocket netState)
-    return $ parseReply reply
+    storeTag netState tag
 
 
 
@@ -165,7 +203,7 @@ genTag netState =
             cycleTime = length charOrder^tagLength
 
 genTag' :: Int -> Int -> String
-genTag' n x = (charOrder !!) <$> fapp n x
+genTag' n x = reverse ((charOrder !!) <$> fapp n x)
 
 fapp :: Int -> Int -> [Int]
 fapp n x = mod' <$> take n (iterate div' x)
