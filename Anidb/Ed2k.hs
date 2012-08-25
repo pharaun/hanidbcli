@@ -1,4 +1,4 @@
-module Ed2k
+module Anidb.Ed2k
     ( init
     , update
     , finalize

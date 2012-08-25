@@ -1,7 +1,7 @@
 import qualified Crypto.Hash.MD4 as MD4
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import qualified Ed2k as E
+import qualified Anidb.Ed2k as E
 import Test.HUnit
 
 main = runTestTT tests

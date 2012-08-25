@@ -13,7 +13,7 @@
 -- can slot it into your event loop or in my case just slap a thread
 -- over it
 --
-module AniRawNetwork
+module Anidb.Network.Raw
     ( connect
     , disconnect
     , sendReq

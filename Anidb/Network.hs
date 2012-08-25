@@ -1,4 +1,4 @@
-module AniNetwork
+module Anidb.Network
     ( connect
     , disconnect
     , processRecieved
@@ -18,8 +18,8 @@ import Data.Functor ((<$>))
 import Data.Maybe (fromJust, isJust)
 import Network.BSD (HostName)
 import Network.HTTP.Base (urlEncodeVars)
-import qualified AniRawNetwork as AR
-import qualified AniReplyParse as AP
+import qualified Anidb.Network.Raw as AR
+import qualified Anidb.Parse.Reply as AP
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L

@@ -1,5 +1,5 @@
-import AniReplyParse
-import AniNetwork
+import Anidb.Parse.Reply
+import Anidb.Network
 import Control.Concurrent (forkIO, killThread, ThreadId, threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception.Base (finally)

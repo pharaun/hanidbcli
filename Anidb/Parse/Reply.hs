@@ -1,4 +1,4 @@
-module AniReplyParse
+module Anidb.Parse.Reply
     ( parseAnidb
     , AniReply
     , ParseError
