@@ -57,3 +57,14 @@ tests = TestList [
         
         full1 = C.replicate blockSize 'g'
         full2 = C.replicate blockSize 'h'
+
+
+-- Anidb reply parser test
+--testString :: String
+--testString = "dadsf 201 JasdSf 10.0.1.123:233 LOGIN ACCEPTED - NEW VERSION AVAILABLE\nanidb.imgserver.com|testdata|dadf\n"
+--
+--testEncode :: String -> L.ByteString
+--testEncode = L.pack . U.encode
+--
+--testComp :: String -> L.ByteString
+--testComp input = L.pack [0,0] `L.append` Z.compress (testEncode input)

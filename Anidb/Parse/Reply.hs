@@ -1,14 +1,13 @@
 module Anidb.Parse.Reply
-    ( parseAnidb
+    ( parseAniReply
+    , AniReplyParsed
+
+    -- TODO: may want to remove these?
     , AniReply
     , ParseError
 
     , getSession
     , getTag
-
-    , testString
-    , testEncode
-    , testComp
     ) where
 
 import Data.Char (isSpace)
@@ -18,53 +17,22 @@ import qualified Codec.Binary.UTF8.String as U
 import qualified Codec.Compression.Zlib as Z
 import qualified Data.ByteString.Lazy as L
 
--- Data extraction
-getSession :: Either ParseError AniReply -> Maybe String
-getSession (Left _)  = Nothing
-getSession (Right x) = getHdrSes (hData (rHeader x))
-    where
-        getHdrSes (Just AniHeaderSession{adSession=x}) = Just x
-        getHdrSes _ = Nothing
-
-getTag :: Either ParseError AniReply -> Maybe String
-getTag (Left _)  = Nothing
-getTag (Right x) = hTag (rHeader x)
-
-
-
--- Test scalfording code
-parseAnidb :: L.ByteString -> Either ParseError AniReply
-parseAnidb inputData =
-        parse anidbReply "(unknown)" $ U.decode $ L.unpack input
-    where
-        input = if L.take 2 inputData == L.pack [0,0] then Z.decompress $ L.drop 2 inputData else inputData
-
-testString :: String
-testString = "dadsf 201 JasdSf 10.0.1.123:233 LOGIN ACCEPTED - NEW VERSION AVAILABLE\nanidb.imgserver.com|testdata|dadf\n"
-
-testEncode :: String -> L.ByteString
-testEncode = L.pack . U.encode
-
-testComp :: String -> L.ByteString
-testComp input = L.pack [0,0] `L.append` Z.compress (testEncode input)
-
-
--- Data/type
-data AniReply = AniReply { -- Probably can just merge the header and this together into one data type to simpify things
-    rHeader :: AniHeader
-    , rData :: Maybe String -- TODO: Can probably have a more detailed type here, but for now just dump the whole data lines in this
-} deriving (Show)
-
-data AniHeader = AniHeader {
+-- Types
+data AniReply = AniReply {
     hTag :: Maybe String
     , hReturnCode :: Integer
 
     , hMessage :: String
-    , hExtraMessage :: Maybe String -- 555 BANNED {str reason}, Error string, etc...
+    -- 555 BANNED {str reason}, Error string, etc...
+    , hExtraMessage :: Maybe String
 
     , hData :: Maybe AniHeaderData
-} deriving (Show)
 
+    -- TODO: Add a more detailed type, for now dump data in here as a string
+    , bData :: Maybe String
+    } deriving (Show)
+
+-- TODO: can add 2 more HeaderData (Buddy list stuff, and notification)
 data AniHeaderData =
     AniHeaderSalt String |
     AniHeaderVersion String |
@@ -75,11 +43,37 @@ data AniHeaderData =
         , adIP :: Maybe String
         , adPort :: Maybe Integer
         , adImgSrv :: Maybe String
-    } -- TODO: can add 2 more HeaderData (Buddy list stuff, and notification)
+    }
     deriving (Show)
 
+-- TODO: Not sure yet
+type AniReplyParsed = Either ParseError AniReply
+
+
+-- Data extraction
+getSession :: AniReplyParsed -> Maybe String
+getSession (Left _)  = Nothing
+getSession (Right x) = getHdrSes (hData x)
+    where
+        getHdrSes (Just AniHeaderSession{adSession=x}) = Just x
+        getHdrSes _ = Nothing
+
+getTag :: AniReplyParsed -> Maybe String
+getTag (Left _)  = Nothing
+getTag (Right x) = hTag x
+
+
+-- Test parser wrapper for dealing with compressed data,
+-- still need to deal with encrypted data and better error handling
+parseAniReply :: L.ByteString -> AniReplyParsed
+parseAniReply inputData =
+        parse anidbReply "(unknown)" $ U.decode $ L.unpack input
+    where
+        input = if L.take 2 inputData == L.pack [0,0] then Z.decompress $ L.drop 2 inputData else inputData
+
+
 --
--- Sample data
+-- Sample data:
 --
 -- *AniNetwork> version b
 -- "998 VERSION\n0.03.705 (2012-08-12)\n"
@@ -90,14 +84,14 @@ data AniHeaderData =
 -- *AniNetwork> ping b True
 -- "300 PONG\n39728\n"
 --
--- Protocol defination
+-- Protocol defination:
 --
--- opt - optional
--- int2 - 2 byte Integer (in string representation)
--- int4 - 4 byte Integer (in string representation)
--- boolean - true or false - use '1' for true, '0' for false
--- str - String (UDP packet length restricts string size to 1400 bytes)
--- hexstr - a hex representation of a decimal value, two characters per byte.
+-- opt      - optional
+-- int2     - 2 byte Integer (in string representation)
+-- int4     - 4 byte Integer (in string representation)
+-- str      - String (UDP packet length restricts string size to 1400 bytes)
+-- hexstr   - a hex representation of a decimal value, two characters per byte.
+-- boolean  - true or false - use '1' for true, '0' for false
 --
 -- Header:
 -- {opt compressed int2 (00)}
@@ -115,21 +109,17 @@ data AniHeaderData =
 --
 -- With NAT enabled - (ipv4 for now...)
 -- 200 {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED
--- 201 {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - blah
+-- 201 {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - NEW VERSION AVAILABLE
 --
 -- With imgServer enabled - Context/connection dependent
 -- 200 {str session_key} LOGIN ACCEPTED
 -- {str image server name}
---
 -- 201 {str session_key} LOGIN ACCEPTED - NEW VERSION AVAILABLE
 -- {str image server name}
 --
 -- 500 LOGIN FAILED
---
 -- 504 CLIENT BANNED - {str reason}
---
 -- 209 {str salt} ENCRYPTION ENABLED
---
 --
 -- Sample headers with known no data section, thus can parse next line:
 -- 555 BANNED
@@ -144,12 +134,10 @@ data AniHeaderData =
 -- 300 PONG
 -- {int4 port} (when nat=1)
 --
---
 -- 6xx INTERNAL SERVER ERROR
 -- ERROR: {str errormessage}
 --
 -- 6xx INTERNAL SERVER ERROR - {str errormessage}
---
 --
 -- Probably unsupported headers:
 -- 253 {int2 start} {int2 end} {int2 total} BUDDY LIST
@@ -158,28 +146,20 @@ data AniHeaderData =
 -- 794 {int4 notify_packet_id} NOTIFICATION - NEW MESSAGE
 --
 --
---
 -- Data section:
 -- {data field 0}|{data field 1}|...|{data field n}
 --
--- Take the bitflag, then bitshift it one by one and return something like
--- [Nothing, Nothing, data, data] for 0011 (bitshift)
---
 
--- A reply is composited of a header and sometime follow on data
+-- Anidb reply is composited of a header and in some case follow on data
 anidbReply :: GenParser Char st AniReply
 anidbReply = do
-    result <- headers
-    dataz <- optionMaybe (many1 anyToken)
-    return $ AniReply result dataz
-
-
-headers :: GenParser Char st AniHeader
-headers = do
     (aTag, return_code) <- tagAndReturnCode
     (returnString, extraMessage, aniExtraData) <- remainingHeaders return_code
     eoh
-    return $ AniHeader aTag return_code returnString extraMessage aniExtraData
+    bodyData <- optionMaybe (many1 anyToken)
+    eof
+
+    return $ AniReply aTag return_code returnString extraMessage aniExtraData bodyData
 
 
 tagAndReturnCode :: GenParser Char st (Maybe String, Integer)
@@ -191,6 +171,7 @@ tagAndReturnCode = try (do
     <|> (do
             rc <- returnCode
             return (Nothing, rc))
+
 
 returnCode :: GenParser Char st Integer
 returnCode = do
@@ -232,7 +213,7 @@ infoString return_code = do
         998 -> return (msg, extraMsg, Just $ AniHeaderVersion $ fromJust hdata)
     where
         handlePong :: Maybe String -> Maybe AniHeaderData
-        handlePong Nothing = Nothing
+        handlePong Nothing  = Nothing
         handlePong (Just a) = Just $ AniHeaderPort $ read a
 
 
@@ -245,7 +226,7 @@ encryptionString = do
     return (msg, extraMsg, Just $ AniHeaderSalt salt)
 
 
--- 20[01] {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - blah
+-- 20[01] {str session_key} {str ip}:{int2 port} LOGIN ACCEPTED - (NEW CLIENT AVAILABLE)
 -- {str image server name}
 loginString :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 loginString = do
@@ -295,11 +276,11 @@ internalError = do
     msg <- many1 (noneOf "-\n")
 
     err <- try (char '-' >> skipMany space >> many1 (noneOf "\n"))
-            <|> (char '\n' >> many1 (noneOf "|\n"))
+           <|> (char '\n' >> many1 (noneOf "|\n"))
 
     return (trimRight msg, Just err, Nothing)
 
---
+
 -- 500 LOGIN FAILED
 -- 504 CLIENT BANNED - {str reason}
 defaultString :: GenParser Char st (String, Maybe String)
@@ -308,40 +289,22 @@ defaultString = do
     msg <- many1 (noneOf "-\n")
     extraMsg <- optionMaybe (char '-' >> skipMany space >> many1 (noneOf "\n"))
     return (trimRight msg, extraMsg)
-    
+
+
 defaultStringWrapper :: GenParser Char st (String, Maybe String, Maybe AniHeaderData)
 defaultStringWrapper = do
     (msg, extraMsg) <- defaultString
     return (msg, extraMsg, Nothing)
 
 
+-- Supporting code
 trimRight :: String -> String
 trimRight str | all isSpace str = ""
 trimRight (c : cs) = c : trimRight cs
 
-eol :: GenParser Char st Char
-eol = char '\n'
-
 eoh :: GenParser Char st Char
-eoh = eol <|> char '|'
+eoh = char '\n' <|> char '|'
 
-
--- Currently unused
-ip :: GenParser Char st String
-ip = do { a1 <- decOctet; char '.'
-        ; a2 <- decOctet; char '.'
-        ; a3 <- decOctet; char '.'
-        ; a4 <- decOctet
-        ; return $ a1++"."++a2++"."++a3++"."++a4
-        }
-
-decOctet :: GenParser Char st String
-decOctet = do
-    a1 <- many1 digit
-    if (read a1 :: Integer) > 255 then
-        fail "Decimal ocet value too large"
-    else
-        return a1
 
 -- TODO: parse the data
 --
