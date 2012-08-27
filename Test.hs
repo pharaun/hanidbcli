@@ -1,6 +1,6 @@
 import Anidb.Parse.Reply
 import Anidb.Network
-import Anidb.Data
+import Anidb.Data as D
 import Control.Concurrent (forkIO, killThread, ThreadId, threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception.Base (finally)
@@ -20,25 +20,34 @@ main = do
 --    forkChild ((threadDelay 1000000) >> (putStrLn "1") >> (auth a "ban" "test" True True) >>= (putStrLn . show))
 
     -- Management stuff
---    forkChild ((threadDelay 2000000) >> (putStrLn "2") >> (ping a True) >>= (putStrLn . show))
---    forkChild ((threadDelay 3000000) >> (putStrLn "3") >> (version a) >>= (putStrLn . show))
---    forkChild ((threadDelay 4000000) >> (putStrLn "4") >> (uptime a) >>= (putStrLn . show))
+    forkChild ((threadDelay 2000000) >> (putStrLn "2") >> (ping a True) >>= (putStrLn . show))
+    forkChild ((threadDelay 3000000) >> (putStrLn "3") >> (version a) >>= (putStrLn . show))
+    forkChild ((threadDelay 4000000) >> (putStrLn "4") >> (uptime a) >>= (putStrLn . show))
 
     -- Data stuff
-    forkChild ((threadDelay 2000000) >> (putStrLn "2") >> (creator a 718) >>= (putStrLn . show))
-    forkChild ((threadDelay 2000000) >> (putStrLn "2") >> (creator a 1) >>= (putStrLn . show))
+    forkChild ((threadDelay 5000000) >> (putStrLn "5") >> (creator a 718) >>= (putStrLn . show))
+    forkChild ((threadDelay 5000000) >> (putStrLn "5") >> (creator a 1) >>= (putStrLn . show))
 
-    forkChild ((threadDelay 3000000) >> (putStrLn "3") >> (character a 488) >>= (putStrLn . show))
-    forkChild ((threadDelay 3000000) >> (putStrLn "3") >> (character a 1) >>= (putStrLn . show))
+    forkChild ((threadDelay 6000000) >> (putStrLn "6") >> (character a 488) >>= (putStrLn . show))
+    forkChild ((threadDelay 6000000) >> (putStrLn "6") >> (character a 1) >>= (putStrLn . show))
 
-    forkChild ((threadDelay 4000000) >> (putStrLn "4") >> (calendar a) >>= (putStrLn . show))
+    forkChild ((threadDelay 7000000) >> (putStrLn "7") >> (calendar a) >>= (putStrLn . show))
 
-    forkChild ((threadDelay 5000000) >> (putStrLn "5") >> (animeDesc a 3169) >>= (putStrLn . show))
-    forkChild ((threadDelay 5000000) >> (putStrLn "5") >> (animeDesc a 1) >>= (putStrLn . show))
-    forkChild ((threadDelay 5000000) >> (putStrLn "5") >> (animeDesc a 2) >>= (putStrLn . show))
+    forkChild ((threadDelay 8000000) >> (putStrLn "8") >> (animeDesc a 3169) >>= (putStrLn . show))
+    forkChild ((threadDelay 8000000) >> (putStrLn "8") >> (animeDesc a 1) >>= (putStrLn . show))
+    forkChild ((threadDelay 8000000) >> (putStrLn "8") >> (animeDesc a 2) >>= (putStrLn . show))
+
+    forkChild ((threadDelay 9000000) >> (putStrLn "9") >> (group a $ D.GroupID 7091) >>= (putStrLn . show))
+    forkChild ((threadDelay 9000000) >> (putStrLn "9") >> (group a $ D.GroupID 3169) >>= (putStrLn . show))
+    forkChild ((threadDelay 9000000) >> (putStrLn "9") >> (group a $ D.GroupName "Frostii") >>= (putStrLn . show))
+    forkChild ((threadDelay 9000000) >> (putStrLn "9") >> (group a $ D.GroupName "NoName") >>= (putStrLn . show))
+
+    forkChild ((threadDelay 10000000) >> (putStrLn "10") >> (groupStatus a 123 $ Just 1) >>= (putStrLn . show))
+    forkChild ((threadDelay 10000000) >> (putStrLn "10") >> (groupStatus a 124 Nothing) >>= (putStrLn . show))
+    forkChild ((threadDelay 10000000) >> (putStrLn "10") >> (groupStatus a 125 Nothing) >>= (putStrLn . show))
 
     -- Deauth
-    forkChild ((threadDelay 10000000) >> (putStrLn "10") >> (logout a) >>= (putStrLn . show))
+    forkChild ((threadDelay 20000000) >> (putStrLn "20") >> (logout a) >>= (putStrLn . show))
 
     -- Join all of the thread, then kill the reciever and disconnect
     waitForChildren

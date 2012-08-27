@@ -249,11 +249,14 @@ genReq (AniRequest req opt reqOpt) = C.pack (req ++ " " ++ (urlEncodeVars $ optT
 
         -- Request Options (Data/etc)
         optStr :: RequestOpt -> Maybe (String, String)
-        optStr (AnimeID x)           = Just ("aid", show x)
-        optStr (CharacterID x)       = Just ("charid", show x)
-        optStr (CreatorID x)         = Just ("creatorid", show x)
-        optStr (DescPart x)          = Just ("part", show x)
-        optStr _                     = Nothing
+        optStr (AnimeCompletionState x) = Just ("state", show x)
+        optStr (AnimeID x)              = Just ("aid", show x)
+        optStr (CharacterID x)          = Just ("charid", show x)
+        optStr (CreatorID x)            = Just ("creatorid", show x)
+        optStr (DescPart x)             = Just ("part", show x)
+        optStr (GroupID x)              = Just ("gid", show x)
+        optStr (GroupName x)            = Just ("gname", x)
+        optStr _                        = Nothing
 
 
 -- Deals with generating the new tag
