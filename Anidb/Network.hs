@@ -11,9 +11,15 @@ module Anidb.Network
     , uptime
 
     -- Data
-    , RequestOpt
+    , getData
+    , RequestType
+    , RequestOpt(..)
+
+    -- Type
+    , AniNetState
 
     , defaultConf
+    , anidbConf
     ) where
 
 import Control.Concurrent (forkIO)
@@ -78,7 +84,7 @@ data InternalRequestOpt =
 
 -- External request option mapping for all of the external data requests
 data RequestOpt =
-    -- Notification Commands
+    -- Notification Commands - TODO: Never has tags, special stuff
     -- Buddy Commands
     -- Anime Data - TODO: Link to mask data
     AnimeID Integer | AnimeName String | AnimeMask String
@@ -213,6 +219,11 @@ uptime :: AniNetState -> IO AP.AniReplyParsed
 uptime netState = sendRequest netState ReadSession $ AniRequest "UPTIME" [] []
 
 
+-- Broad command support for the data subtype
+getData :: AniNetState -> RequestType -> [RequestOpt] -> IO AP.AniReplyParsed
+getData netState req reqOpt = sendRequest netState ReadSession $ AniRequest req [] reqOpt
+
+
 -- Supporting code - TODO: should take care of encoding
 genReq :: AniRequest -> B.ByteString
 genReq (AniRequest req opt reqOpt) = C.pack (req ++ " " ++ (urlEncodeVars $ optToStr opt reqOpt))
@@ -222,23 +233,27 @@ genReq (AniRequest req opt reqOpt) = C.pack (req ++ " " ++ (urlEncodeVars $ optT
 
         -- Internal Request Options
         iOptStr :: InternalRequestOpt -> Maybe (String, String)
-        iOptStr (UserName x)         = Just ("user", x)
-        iOptStr (Password x)         = Just ("pass", x)
         iOptStr (AniDBProtoVer x)    = Just ("protover", show x)
-        iOptStr (ClientVer x)        = Just ("clientver", show x)
         iOptStr (ClientName x)       = Just ("client", x)
-        iOptStr (NAT True)           = Just ("nat", "1")
-        iOptStr (ImgServer True)     = Just ("imgserver", "1")
+        iOptStr (ClientVer x)        = Just ("clientver", show x)
         iOptStr (Compression True)   = Just ("comp", "1")
         iOptStr (Encode (Just x))    = Just ("enc", x)
+        iOptStr (ImgServer True)     = Just ("imgserver", "1")
         iOptStr (MTU (Just x))       = Just ("mtu", show x)
+        iOptStr (NAT True)           = Just ("nat", "1")
+        iOptStr (Password x)         = Just ("pass", x)
         iOptStr (SessionOpt x)       = Just ("s", x)
         iOptStr (TagOpt x)           = Just ("tag", x)
+        iOptStr (UserName x)         = Just ("user", x)
         iOptStr _                    = Nothing
 
         -- Request Options (Data/etc)
         optStr :: RequestOpt -> Maybe (String, String)
-        optStr _ = Nothing
+        optStr (AnimeID x)           = Just ("aid", show x)
+        optStr (CharacterID x)       = Just ("charid", show x)
+        optStr (CreatorID x)         = Just ("creatorid", show x)
+        optStr (DescPart x)          = Just ("part", show x)
+        optStr _                     = Nothing
 
 
 -- Deals with generating the new tag
@@ -268,3 +283,6 @@ charOrder = ['a'..'z'] ++ ['A'..'Z'] ++ ['1'..'9']
 -- Test stuff here
 defaultConf :: AniNetConf
 defaultConf = AniNetConf "localhost" 9000 3 10000 "anidbcli" 1 (Just "UTF8") Nothing False
+
+anidbConf :: AniNetConf
+anidbConf = AniNetConf "api.anidb.net" 9000 3 10000 "anidbcli" 1 (Just "UTF8") Nothing False
