@@ -1,11 +1,16 @@
 module Anidb.Data
-    ( anime
+    ( AnimeArg(..)
+    , anime
 
     , animeDesc
     , calendar
     , character
     , creator
+
+    , EpisodeArg(..)
     , episode
+
+    , FileArg(..)
     , file
 
     , GroupArg(..)
@@ -20,6 +25,23 @@ import qualified Anidb.Parse.Data as APD
 
 -- Type def
 data GroupArg = GroupName String | GroupID Integer
+
+data EpisodeArg = EpisodeID Integer
+                | EpisodeAnimeID Integer Integer
+                | EpisodeAnimeName String Integer
+
+data AnimeArg = AnimeID Integer | AnimeName String
+
+type AnimeMask = String
+
+type FileAnimeMask = String
+
+type FileMask = String
+
+data FileArg = FileID Integer
+             | FileHash String Integer
+             | FileAnimeGroup AnimeArg GroupArg Integer
+
 
 -- Deals with the creator data type/response
 creator :: AN.AniNetState -> Integer -> IO APR.AniReplyParsed
@@ -57,6 +79,29 @@ groupStatus netState aid Nothing      = AN.getData netState "GROUPSTATUS" [AN.An
 groupStatus netState aid (Just state) = AN.getData netState "GROUPSTATUS" [AN.AnimeID aid, AN.AnimeCompletionState state]
 
 
-anime = undefined
-episode = undefined
-file = undefined
+episode :: AN.AniNetState -> EpisodeArg -> IO APR.AniReplyParsed
+episode netState (EpisodeID eid)               = AN.getData netState "EPISODE" [AN.EpisodeID eid]
+episode netState (EpisodeAnimeID aid epno)     = AN.getData netState "EPISODE" [AN.AnimeID aid, AN.EpisodeNO epno]
+episode netState (EpisodeAnimeName aname epno) = AN.getData netState "EPISODE" [AN.AnimeName aname, AN.EpisodeNO epno]
+
+
+-- TODO: do more in depth analysis of the mask
+anime :: AN.AniNetState -> AnimeArg -> Maybe AnimeMask -> IO APR.AniReplyParsed
+anime netState (AnimeID aid) Nothing         = AN.getData netState "ANIME" [AN.AnimeID aid]
+anime netState (AnimeID aid) (Just mask)     = AN.getData netState "ANIME" [AN.AnimeID aid, AN.AnimeMask mask]
+anime netState (AnimeName aname) Nothing     = AN.getData netState "ANIME" [AN.AnimeName aname]
+anime netState (AnimeName aname) (Just mask) = AN.getData netState "ANIME" [AN.AnimeName aname, AN.AnimeMask mask]
+
+
+-- TODO: Need an idea of what the default anime/file mask is here, also
+-- need a short anime mask here
+file :: AN.AniNetState -> FileArg -> FileMask -> FileAnimeMask -> IO APR.AniReplyParsed
+file netState (FileID fid) fmask amask                      = AN.getData netState "FILE" [AN.FileID fid, AN.FileMask fmask, AN.AnimeMask amask]
+file netState (FileHash hash size) fmask amask              = AN.getData netState "FILE" [AN.FileHash hash, AN.FileSize size, AN.FileMask fmask, AN.AnimeMask amask]
+file netState (FileAnimeGroup anime group epno) fmask amask = subFile netState anime group epno fmask amask
+    where
+        subFile :: AN.AniNetState -> AnimeArg -> GroupArg -> Integer -> FileMask -> AnimeMask -> IO APR.AniReplyParsed
+        subFile netState (AnimeID aid) (GroupID gid) epno fmask amask         = AN.getData netState "FILE" [AN.AnimeID aid, AN.GroupID gid, AN.EpisodeNO epno, AN.FileMask fmask, AN.AnimeMask amask]
+        subFile netState (AnimeID aid) (GroupName gname) epno fmask amask     = AN.getData netState "FILE" [AN.AnimeID aid, AN.GroupName gname, AN.EpisodeNO epno, AN.FileMask fmask, AN.AnimeMask amask]
+        subFile netState (AnimeName aname) (GroupID gid) epno fmask amask     = AN.getData netState "FILE" [AN.AnimeName aname, AN.GroupID gid, AN.EpisodeNO epno, AN.FileMask fmask, AN.AnimeMask amask]
+        subFile netState (AnimeName aname) (GroupName gname) epno fmask amask = AN.getData netState "FILE" [AN.AnimeName aname, AN.GroupName gname, AN.EpisodeNO epno, AN.FileMask fmask, AN.AnimeMask amask]

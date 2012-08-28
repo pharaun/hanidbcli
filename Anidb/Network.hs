@@ -87,7 +87,7 @@ data RequestOpt =
     -- Notification Commands - TODO: Never has tags, special stuff
     -- Buddy Commands
     -- Anime Data - TODO: Link to mask data
-    AnimeID Integer | AnimeName String | AnimeMask String
+    AnimeID Integer | AnimeName String | AnimeMask String -- TODO: probably need a long/short ver
     -- Anime Description
     | DescPart Integer
     -- Character Data
@@ -251,12 +251,19 @@ genReq (AniRequest req opt reqOpt) = C.pack (req ++ " " ++ (urlEncodeVars $ optT
         optStr :: RequestOpt -> Maybe (String, String)
         optStr (AnimeCompletionState x) = Just ("state", show x)
         optStr (AnimeID x)              = Just ("aid", show x)
+        optStr (AnimeMask x)            = Just ("amask", x)
+        optStr (AnimeName x)            = Just ("aname", x)
         optStr (CharacterID x)          = Just ("charid", show x)
         optStr (CreatorID x)            = Just ("creatorid", show x)
         optStr (DescPart x)             = Just ("part", show x)
+        optStr (EpisodeID x)            = Just ("eid", show x)
+        optStr (EpisodeNO x)            = Just ("epno", show x)
+        optStr (FileHash x)             = Just ("ed2k", x)
+        optStr (FileID x)               = Just ("fid", show x)
+        optStr (FileMask x)             = Just ("fmask", x)
+        optStr (FileSize x)             = Just ("size", show x)
         optStr (GroupID x)              = Just ("gid", show x)
         optStr (GroupName x)            = Just ("gname", x)
-        optStr _                        = Nothing
 
 
 -- Deals with generating the new tag
