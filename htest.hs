@@ -46,7 +46,7 @@ tests = TestList [
     ]
     where
         empty = C.pack ""
-        
+
         quarter1 = C.replicate (blockSize `div` 4) 'a'
         quarter2 = C.replicate (blockSize `div` 4) 'b'
 
@@ -54,7 +54,7 @@ tests = TestList [
         half2 = C.replicate (blockSize `div` 2) 'd'
         half3 = C.replicate (blockSize `div` 2) 'e'
         half4 = C.replicate (blockSize `div` 2) 'f'
-        
+
         full1 = C.replicate blockSize 'g'
         full2 = C.replicate blockSize 'h'
 

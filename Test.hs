@@ -14,7 +14,7 @@ main = do
 
     -- Spin up the reciever
     recv <- forkIO (forever $ processRecieved a)
-    
+
     -- fork off each message for testing reciever stuff
     forkChild ((threadDelay 1000000) >> (putStrLn "1") >> (auth a "test" "test" True True) >>= (putStrLn . show))
 --    forkChild ((threadDelay 1000000) >> (putStrLn "1") >> (auth a "ban" "test" True True) >>= (putStrLn . show))
@@ -63,6 +63,7 @@ main = do
     forkChild ((threadDelay 13000000) >> (putStrLn "13") >> (file a (D.FileAnimeGroup (D.AnimeID 4688) (D.GroupName "Frostii") 2) "7FF8FEF8" "C000F0C0") >>= (putStrLn . show))
     forkChild ((threadDelay 13000000) >> (putStrLn "13") >> (file a (D.FileAnimeGroup (D.AnimeName "Sora he no Tsubasa") (D.GroupID 4243) 2) "7FF8FEF8" "C000F0C0") >>= (putStrLn . show))
     forkChild ((threadDelay 13000000) >> (putStrLn "13") >> (file a (D.FileAnimeGroup (D.AnimeName "Sora he no Tsubasa") (D.GroupName "Frostii") 2) "7FF8FEF8" "C000F0C0") >>= (putStrLn . show))
+    forkChild ((threadDelay 13000000) >> (putStrLn "13") >> (file a (D.FileID 312499) "7FF8FEF8" "C000F0C0") >>= (putStrLn . show))
 
     -- Deauth
     forkChild ((threadDelay 14000000) >> (putStrLn "20") >> (logout a) >>= (putStrLn . show))
@@ -70,7 +71,7 @@ main = do
     -- Join all of the thread, then kill the reciever and disconnect
     waitForChildren
     killThread recv
-    
+
     disconnect a
 
 
