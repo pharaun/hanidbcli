@@ -33,7 +33,7 @@ import Control.Applicative hiding ((<|>), many)
 import Data.Bits (testBit)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (readTime)
-import Data.Word (Word8)
+import Data.Word (Word8, Word64)
 import System.Locale (defaultTimeLocale)
 import Text.ParserCombinators.Parsec
 
@@ -483,3 +483,150 @@ testCharacter = "488|ニコ・ロビン|Nico Robin|14789.jpg|4097,2,1900,1'69,2,
 --file :: AN.AniNetState -> FileArg -> FileMask -> FileAnimeMask -> IO APR.AniReplyParsed
 ---- TODO: do more in depth analysis of the mask
 --anime :: AN.AniNetState -> AnimeArg -> Maybe AnimeMask -> IO APR.AniReplyParsed
+
+
+
+-- Short Amask
+--
+-- 4 Bytes = Word32
+--
+-- Need a clean way to parse/store the structure.
+--
+-- 1. parse/convert the hexmask into a Word32 and use popCount to get # of set bits
+-- 2. Iterate through the mask and consult a lookup table for how to parse each field
+-- 3. Need to figure out a good way to store the data, since the fattiest one is the
+--      long amask at almost 64bit, that's ~64 fields, a pain in the ass
+--
+-- 4. For fetching we can just provide a recordLike interface off a basic data structure
+--      that stores the mask & a map of the actual data.
+
+-- TODO: May be able to abstract away MaskType via TypeClass
+data MaskType = ShortAnimeMask | LongAnimeMask | FileMask
+    deriving (Show)
+
+data Mask = Mask MaskType Word64
+    deriving (Show)
+
+mkMask :: MaskType -> String -> Mask
+mkMask a hexstr = Mask a (mkWord64 hexstr)
+    where
+        mkWord64 :: String -> Word64
+        mkWord64 s@('0':'x':_) = fromIntegral (read s) :: Word64
+        mkWord64 s@('0':'X':_) = fromIntegral (read s) :: Word64
+        mkWord64 s             = fromIntegral (read ("0x" ++ s)) :: Word64
+
+-- Return True if the mask is known good, False otherwise
+valididateMask :: Mask -> Bool
+
+
+-- Explaination, its (Int, Int), in which it is
+-- Byte x, Bit y - from lsb (rightmost byte 0, bit 0)
+-- to msb (leftmost byte 4,5,7 bit 7)
+-- Undefined = not listed
+validMaskField :: Mask -> [(Integer, Integer)]
+validMaskField (Mask ShortAnimeMask _) =
+    [ (0, 0) -- {int4 date aid record updated}
+    , (0, 6) -- {str group short name}
+    , (0, 7) -- {str group name}
+    , (1, 2) -- {int4 episode vote count}
+    , (1, 3) -- {int4 episode rating}
+    , (1, 4) -- {str ep kanji name}
+    , (1, 5) -- {str ep romaji name}
+    , (1, 6) -- {str ep name}
+    , (1, 7) -- {str epno}
+    , (2, 2) -- {str synonym list}
+    , (2, 3) -- {str short name list}
+    , (2, 4) -- {str other name}
+    , (2, 5) -- {str english name}
+    , (2, 6) -- {str kanji name}
+    , (2, 7) -- {str romaji name}
+    , (3, 1) -- {str category list}
+    , (3, 2) -- {str related aid type}
+    , (3, 3) -- {str related aid list}
+    , (3, 4) -- {str type}
+    , (3, 5) -- {str year}
+    , (3, 6) -- {int4 highest episode number}
+    , (3, 7) -- {int4 anime total episodes}
+    ]
+validMaskField (Mask FileMask _) =
+    [ (0, 1) -- {str mylist other}
+    , (0, 2) -- {str mylist source}
+    , (0, 3) -- {str mylist storage}
+    , (0, 4) -- {int4 mylist viewdate}
+    , (0, 5) -- {int4 mylist viewed}
+    , (0, 6) -- {int4 mylist filestate}
+    , (0, 7) -- {int4 mylist state}
+    , (1, 0) -- {str anidb file name}
+    , (1, 3) -- {int4 aired date}
+    , (1, 4) -- {str description}
+    , (1, 5) -- {int4 length in seconds}
+    , (1, 6) -- {str sub language}
+    , (1, 7) -- {str dub language}
+    , (2, 0) -- {str file type (extension)}
+    , (2, 1) -- {str video resolution}
+    , (2, 2) -- {int4 video bitrate}
+    , (2, 3) -- {str video codec}
+    , (2, 4) -- {int4 audio bitrate list}
+    , (2, 5) -- {str audio codec list}
+    , (2, 6) -- {str source}
+    , (2, 7) -- {str quality}
+    , (3, 1) -- {video colour depth}
+    , (3, 3) -- {str crc32}
+    , (3, 4) -- {str sha1}
+    , (3, 5) -- {str md5}
+    , (3, 6) -- {str ed2k}
+    , (3, 7) -- {int8 size}
+    , (4, 0) -- {int2 state}
+    , (4, 1) -- {int2 IsDeprecated}
+    , (4, 2) -- {list other episodes}
+    , (4, 3) -- {int4 mylist id}
+    , (4, 4) -- {int4 gid}
+    , (4, 5) -- {int4 eid}
+    , (4, 6) -- {int4 aid}
+    ]
+validMaskField (Mask LongAnimeMask _) =
+    [ (0, 3) -- {int4 parody count}
+    , (0, 4) -- {int4 trailer count}
+    , (0, 5) -- {int4 other count}
+    , (0, 6) -- {int4 credits count}
+    , (0, 7) -- {int4 specials count}
+    , (1, 4) -- {str main creator name list}
+    , (1, 5) -- {int main creator id list}
+    , (1, 6) -- {int creator id list}
+    , (1, 7) -- {int character id list}
+    , (2, 0) -- {int date record updated}
+    , (2, 4) -- {str AnimeNfo id}
+    , (2, 5) -- {int allcinema id}
+    , (2, 6) -- {int ANN id}
+    , (2, 7) -- {int anime planet id}
+    , (3, 0) -- {bool is 18+ restricted}
+    , (3, 1) -- {str award list}
+    , (3, 2) -- {int review count}
+    , (3, 3) -- {int4 average review rating}
+    , (3, 4) -- {int temp vote count}
+    , (3, 5) -- {int4 temp rating}
+    , (3, 6) -- {int vote count}
+    , (3, 7) -- {int4 rating}
+    , (4, 0) -- {str category id list}
+    , (4, 1) -- {str picname}
+    , (4, 2) -- {str url}
+    , (4, 3) -- {int end date}
+    , (4, 4) -- {int air date}
+    , (4, 5) -- {int4 special ep count}
+    , (4, 6) -- {int4 highest episode number}
+    , (4, 7) -- {int4 episodes}
+    , (5, 2) -- {str synonym list}
+    , (5, 3) -- {str short name list}
+    , (5, 4) -- {str other name}
+    , (5, 5) -- {str english name}
+    , (5, 6) -- {str kanji name}
+    , (5, 7) -- {str romaji name}
+    , (6, 0) -- {str category weight list}
+    , (6, 1) -- {str category list}
+    , (6, 2) -- {str related aid type}
+    , (6, 3) -- {str related aid list}
+    , (6, 4) -- {str type}
+    , (6, 5) -- {str year}
+    , (6, 6) -- {int dateflags}
+    , (6, 7) -- {int aid}
+    ]
