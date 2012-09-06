@@ -109,10 +109,7 @@ data AniData =
         , cWikiJapanese :: String
         , cLastUpdate :: UTCTime
         }
-    | AniCalendar {
-          caAired :: [AniCalendarSeries]
-        , caToAir :: [AniCalendarSeries]
-        }
+    | AniCalendar [AniCalendarSeries] [AniCalendarSeries]
     | AniEpisode {
           aeEid :: Integer
         , aeAid :: Integer
@@ -149,9 +146,7 @@ data AniData =
         , agLastActivityDate :: UTCTime
         , agGroupRelations :: [GroupRelations]
         }
-    | AniGroupStatus {
-        agsGroupStatus :: [GroupStatus]
-        }
+    | AniGroupStatus [GroupStatus]
     | AniCharacter {
           acCid :: Integer
         , acNameKanji :: String
@@ -190,16 +185,16 @@ parseCharacter input = parse anidbCharacter "(unknown)" input
 -- Anime Creator
 anidbCreator :: GenParser Char st AniData
 anidbCreator = AniCreator
-        <$> parseInt -- {int creatorid}
-        <*> parseStr -- {str creator name kanji}
-        <*> parseStr -- {str creator name transcription}
-        <*> parseInt -- TODO: {int type} - 1='person', 2='company', 3='collaboration'
-        <*> parseStr -- {str pic_name}
-        <*> parseStr -- {str url_english}
-        <*> parseStr -- {str url_japanese}
-        <*> parseStr -- {str wiki_url_english}
-        <*> parseStr -- {str wiki_url_japanese}
-        <*> parseDate -- {int last update date}
+    <$> parseInt -- {int creatorid}
+    <*> parseStr -- {str creator name kanji}
+    <*> parseStr -- {str creator name transcription}
+    <*> parseInt -- TODO: {int type} - 1='person', 2='company', 3='collaboration'
+    <*> parseStr -- {str pic_name}
+    <*> parseStr -- {str url_english}
+    <*> parseStr -- {str url_japanese}
+    <*> parseStr -- {str wiki_url_english}
+    <*> parseStr -- {str wiki_url_japanese}
+    <*> parseDate -- {int last update date}
 --        <*> eof
 
 -- Anime Calendar
