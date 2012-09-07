@@ -30,12 +30,14 @@ module Anidb.Parse.Data
 
 --import qualified Anidb.Parse.Reply as APR
 import Control.Applicative hiding ((<|>), many)
-import Data.Bits (testBit)
+import Data.Bits (setBit, testBit, complement, (.&.))
+import Data.Maybe (catMaybes)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (readTime)
 import Data.Word (Word8, Word64)
 import System.Locale (defaultTimeLocale)
 import Text.ParserCombinators.Parsec
+import qualified Data.IntMap as IntMap
 
 -- Types
 type AniDataParsed = Either ParseError AniData
@@ -477,6 +479,11 @@ testGroupStatus = "123|Frostii|1|20|7231|2231|01-22\n121|Frost|5|19|0|0|02-22\n1
 testCharacter :: String
 testCharacter = "488|ニコ・ロビン|Nico Robin|14789.jpg|4097,2,1900,1'69,2,1901,0'6199,0,1900,1'5691,0,1900,1'2644,0,,'4851,0,1900,1||1236938094|1|F\n"
 
+testAnime :: String
+testAnime = "1|1999-1999|TV Series|Space,Future,Plot Continuity,SciFi,Space Travel,Shipboard,Other Planet,Novel,Genetic Modification,Action,Romance,Military,Large Breasts,Gunfights,Adventure,Human Enhancement,Nudity|Seikai no Monshou|星界の紋章|Crest of the Stars||13|13|3|853|3225|756|110|875|11"
+
+testAnimeMask :: String
+testAnimeMask = "b2f0e0fc000000"
 
 ---- TODO: Need an idea of what the default anime/file mask is here, also
 ---- need a short anime mask here
@@ -484,21 +491,48 @@ testCharacter = "488|ニコ・ロビン|Nico Robin|14789.jpg|4097,2,1900,1'69,2,
 ---- TODO: do more in depth analysis of the mask
 --anime :: AN.AniNetState -> AnimeArg -> Maybe AnimeMask -> IO APR.AniReplyParsed
 
+parseAnime :: Mask -> String -> Either ParseError (IntMap.IntMap ParseVal)
+parseAnime mask input = parse (anidbAnime mask) "(unknown)" input
 
+anidbAnime :: Mask -> GenParser Char st (IntMap.IntMap ParseVal)
+anidbAnime mask = do
+    let idx = idxList mask
+        da  = IntMap.empty
+    return da
 
--- Short Amask
+data ParseVal  = PVInt Integer -- {plain integer}
+               | PVIntList [Integer] -- {integer list} - ,
+               | PVStr String -- {plain string}
+               | PVStrList [String] -- {string list} - ',
+               | PVBool Bool -- {boolean}
+               | PVDate UTCTime -- {UTCTime}
+               | PVDateFlag DateFlag -- {DateFlag}
+               | PVFileState String -- {FileState}
+    deriving (Show)
+
 --
--- 4 Bytes = Word32
+-- IntMap
+-- k -> (Byte*8+Bit) -> v
+-- v -> (ADT - Int/ListInt/Str/ListStr/Bool/Date/etc...)
 --
--- Need a clean way to parse/store the structure.
+-- Generate a set of index from the mask, then consult the bitmask to see
+-- if the value is included, if so, parse and load it into the intMap
 --
--- 1. parse/convert the hexmask into a Word32 and use popCount to get # of set bits
--- 2. Iterate through the mask and consult a lookup table for how to parse each field
--- 3. Need to figure out a good way to store the data, since the fattiest one is the
---      long amask at almost 64bit, that's ~64 fields, a pain in the ass
+-- Main trouble will be looking up the "type" to parse it as, looks like we can
+-- just use a built/manual intmap (idx -> type)
 --
--- 4. For fetching we can just provide a recordLike interface off a basic data structure
---      that stores the mask & a map of the actual data.
+-- Then to extract the desired value just give the idx and out comes the value in the type ADT
+--
+-- Latter can look into TH to generate nice getter for the intMap
+
+data ParseType = PTInt -- {plain integer}
+               | PTIntList -- {integer list} - ,
+               | PTStr -- {plain string}
+               | PTStrList -- {string list} - ',
+               | PTBool -- {boolean}
+               | PTDate -- {UTCTime}
+               | PTDateFlag -- {DateFlag}
+               | PTFileState -- {FileState}
 
 -- TODO: May be able to abstract away MaskType via TypeClass
 data MaskType = ShortAnimeMask | LongAnimeMask | FileMask
@@ -517,116 +551,128 @@ mkMask a hexstr = Mask a (mkWord64 hexstr)
 
 -- Return True if the mask is known good, False otherwise
 valididateMask :: Mask -> Bool
+valididateMask (Mask m x) = (x .&. complement (idx2Mask $ validMaskField m)) == 0
+    where
+        idx2Mask :: [(Int, Int, ParseType)] -> Word64
+        idx2Mask = foldl (\a (x, y, _) -> setBit a (x*8+y)) 0
 
+-- Generate a list of idx pointers from a mask
+idxList :: Mask -> [Int]
+idxList (Mask m x) = catMaybes $ map (isSet x) (validMaskField m)
+    where
+        isSet :: Word64 -> (Int, Int, ParseType) -> Maybe Int
+        isSet a (x, y, _)
+            | testBit a (x*8+y) = Just (x*8+y)
+            | otherwise         = Nothing
 
 -- Explaination, its (Int, Int), in which it is
 -- Byte x, Bit y - from lsb (rightmost byte 0, bit 0)
 -- to msb (leftmost byte 4,5,7 bit 7)
 -- Undefined = not listed
-validMaskField :: Mask -> [(Integer, Integer)]
-validMaskField (Mask ShortAnimeMask _) =
-    [ (0, 0) -- {int4 date aid record updated}
-    , (0, 6) -- {str group short name}
-    , (0, 7) -- {str group name}
-    , (1, 2) -- {int4 episode vote count}
-    , (1, 3) -- {int4 episode rating}
-    , (1, 4) -- {str ep kanji name}
-    , (1, 5) -- {str ep romaji name}
-    , (1, 6) -- {str ep name}
-    , (1, 7) -- {str epno}
-    , (2, 2) -- {str synonym list}
-    , (2, 3) -- {str short name list}
-    , (2, 4) -- {str other name}
-    , (2, 5) -- {str english name}
-    , (2, 6) -- {str kanji name}
-    , (2, 7) -- {str romaji name}
-    , (3, 1) -- {str category list}
-    , (3, 2) -- {str related aid type}
-    , (3, 3) -- {str related aid list}
-    , (3, 4) -- {str type}
-    , (3, 5) -- {str year}
-    , (3, 6) -- {int4 highest episode number}
-    , (3, 7) -- {int4 anime total episodes}
+validMaskField :: MaskType -> [(Int, Int, ParseType)]
+validMaskField ShortAnimeMask =
+    [ (0, 0, PTDate) -- {int4 date aid record updated}
+    , (0, 6, PTStr) -- {str group short name}
+    , (0, 7, PTStr) -- {str group name}
+    , (1, 2, PTInt) -- {int4 episode vote count}
+    , (1, 3, PTInt) -- {int4 episode rating}
+    , (1, 4, PTStr) -- {str ep kanji name}
+    , (1, 5, PTStr) -- {str ep romaji name}
+    , (1, 6, PTStr) -- {str ep name}
+    , (1, 7, PTStr) -- {str epno}
+    , (2, 2, PTStrList) -- {str synonym list}
+    , (2, 3, PTStrList) -- {str short name list}
+    , (2, 4, PTStrList) -- {str other name}
+    , (2, 5, PTStr) -- {str english name}
+    , (2, 6, PTStr) -- {str kanji name}
+    , (2, 7, PTStr) -- {str romaji name}
+    , (3, 1, PTStrList) -- {str category list}
+    , (3, 2, PTStr) -- {str related aid type}
+    , (3, 3, PTStrList) -- {str related aid list}
+    , (3, 4, PTStr) -- {str type}
+    , (3, 5, PTStr) -- {str year}
+    , (3, 6, PTInt) -- {int4 highest episode number}
+    , (3, 7, PTInt) -- {int4 anime total episodes}
     ]
-validMaskField (Mask FileMask _) =
-    [ (0, 1) -- {str mylist other}
-    , (0, 2) -- {str mylist source}
-    , (0, 3) -- {str mylist storage}
-    , (0, 4) -- {int4 mylist viewdate}
-    , (0, 5) -- {int4 mylist viewed}
-    , (0, 6) -- {int4 mylist filestate}
-    , (0, 7) -- {int4 mylist state}
-    , (1, 0) -- {str anidb file name}
-    , (1, 3) -- {int4 aired date}
-    , (1, 4) -- {str description}
-    , (1, 5) -- {int4 length in seconds}
-    , (1, 6) -- {str sub language}
-    , (1, 7) -- {str dub language}
-    , (2, 0) -- {str file type (extension)}
-    , (2, 1) -- {str video resolution}
-    , (2, 2) -- {int4 video bitrate}
-    , (2, 3) -- {str video codec}
-    , (2, 4) -- {int4 audio bitrate list}
-    , (2, 5) -- {str audio codec list}
-    , (2, 6) -- {str source}
-    , (2, 7) -- {str quality}
-    , (3, 1) -- {video colour depth}
-    , (3, 3) -- {str crc32}
-    , (3, 4) -- {str sha1}
-    , (3, 5) -- {str md5}
-    , (3, 6) -- {str ed2k}
-    , (3, 7) -- {int8 size}
-    , (4, 0) -- {int2 state}
-    , (4, 1) -- {int2 IsDeprecated}
-    , (4, 2) -- {list other episodes}
-    , (4, 3) -- {int4 mylist id}
-    , (4, 4) -- {int4 gid}
-    , (4, 5) -- {int4 eid}
-    , (4, 6) -- {int4 aid}
+validMaskField FileMask =
+    [ (0, 1, PTStr) -- {str mylist other}
+    , (0, 2, PTStr) -- {str mylist source}
+    , (0, 3, PTStr) -- {str mylist storage}
+    , (0, 4, PTDate) -- {int4 mylist viewdate}
+    , (0, 5, PTInt) -- {int4 mylist viewed}
+    , (0, 6, PTInt) -- {int4 mylist filestate}
+    , (0, 7, PTInt) -- {int4 mylist state}
+    , (1, 0, PTStr) -- {str anidb file name}
+    , (1, 3, PTDate) -- {int4 aired date}
+    , (1, 4, PTStr) -- {str description}
+    , (1, 5, PTInt) -- {int4 length in seconds}
+    , (1, 6, PTStr) -- {str sub language}
+    , (1, 7, PTStr) -- {str dub language}
+    , (2, 0, PTStr) -- {str file type (extension)}
+    , (2, 1, PTStr) -- {str video resolution}
+    , (2, 2, PTInt) -- {int4 video bitrate}
+    , (2, 3, PTStr) -- {str video codec}
+    , (2, 4, PTIntList) -- {int4 audio bitrate list}
+    , (2, 5, PTStrList) -- {str audio codec list}
+    , (2, 6, PTStr) -- {str source}
+    , (2, 7, PTStr) -- {str quality}
+    , (3, 1, PTStr) -- {video colour depth} - ? (str for now)
+    , (3, 3, PTStr) -- {str crc32}
+    , (3, 4, PTStr) -- {str sha1}
+    , (3, 5, PTStr) -- {str md5}
+    , (3, 6, PTStr) -- {str ed2k}
+    , (3, 7, PTInt) -- {int8 size}
+    , (4, 0, PTFileState) -- {int2 state} - State Type
+    , (4, 1, PTInt) -- {int2 IsDeprecated}
+    , (4, 2, PTStrList) -- {list other episodes} - ? (str for now)
+    , (4, 3, PTInt) -- {int4 mylist id}
+    , (4, 4, PTInt) -- {int4 gid}
+    , (4, 5, PTInt) -- {int4 eid}
+    , (4, 6, PTInt) -- {int4 aid}
     ]
-validMaskField (Mask LongAnimeMask _) =
-    [ (0, 3) -- {int4 parody count}
-    , (0, 4) -- {int4 trailer count}
-    , (0, 5) -- {int4 other count}
-    , (0, 6) -- {int4 credits count}
-    , (0, 7) -- {int4 specials count}
-    , (1, 4) -- {str main creator name list}
-    , (1, 5) -- {int main creator id list}
-    , (1, 6) -- {int creator id list}
-    , (1, 7) -- {int character id list}
-    , (2, 0) -- {int date record updated}
-    , (2, 4) -- {str AnimeNfo id}
-    , (2, 5) -- {int allcinema id}
-    , (2, 6) -- {int ANN id}
-    , (2, 7) -- {int anime planet id}
-    , (3, 0) -- {bool is 18+ restricted}
-    , (3, 1) -- {str award list}
-    , (3, 2) -- {int review count}
-    , (3, 3) -- {int4 average review rating}
-    , (3, 4) -- {int temp vote count}
-    , (3, 5) -- {int4 temp rating}
-    , (3, 6) -- {int vote count}
-    , (3, 7) -- {int4 rating}
-    , (4, 0) -- {str category id list}
-    , (4, 1) -- {str picname}
-    , (4, 2) -- {str url}
-    , (4, 3) -- {int end date}
-    , (4, 4) -- {int air date}
-    , (4, 5) -- {int4 special ep count}
-    , (4, 6) -- {int4 highest episode number}
-    , (4, 7) -- {int4 episodes}
-    , (5, 2) -- {str synonym list}
-    , (5, 3) -- {str short name list}
-    , (5, 4) -- {str other name}
-    , (5, 5) -- {str english name}
-    , (5, 6) -- {str kanji name}
-    , (5, 7) -- {str romaji name}
-    , (6, 0) -- {str category weight list}
-    , (6, 1) -- {str category list}
-    , (6, 2) -- {str related aid type}
-    , (6, 3) -- {str related aid list}
-    , (6, 4) -- {str type}
-    , (6, 5) -- {str year}
-    , (6, 6) -- {int dateflags}
-    , (6, 7) -- {int aid}
+validMaskField LongAnimeMask =
+    [ (0, 3, PTInt) -- {int4 parody count}
+    , (0, 4, PTInt) -- {int4 trailer count}
+    , (0, 5, PTInt) -- {int4 other count}
+    , (0, 6, PTInt) -- {int4 credits count}
+    , (0, 7, PTInt) -- {int4 specials count}
+    , (1, 4, PTStrList) -- {str main creator name list}
+    , (1, 5, PTIntList) -- {int main creator id list}
+    , (1, 6, PTIntList) -- {int creator id list}
+    , (1, 7, PTIntList) -- {int character id list}
+    , (2, 0, PTDate) -- {int date record updated}
+    , (2, 4, PTStr) -- {str AnimeNfo id}
+    , (2, 5, PTInt) -- {int allcinema id}
+    , (2, 6, PTInt) -- {int ANN id}
+    , (2, 7, PTInt) -- {int anime planet id}
+    , (3, 0, PTBool) -- {bool is 18+ restricted}
+    , (3, 1, PTStrList) -- {str award list}
+    , (3, 2, PTInt) -- {int review count}
+    , (3, 3, PTInt) -- {int4 average review rating}
+    , (3, 4, PTInt) -- {int temp vote count}
+    , (3, 5, PTInt) -- {int4 temp rating}
+    , (3, 6, PTInt) -- {int vote count}
+    , (3, 7, PTInt) -- {int4 rating}
+    , (4, 0, PTStrList) -- {str category id list}
+    , (4, 1, PTStr) -- {str picname}
+    , (4, 2, PTStr) -- {str url}
+    , (4, 3, PTDate) -- {int end date}
+    , (4, 4, PTDate) -- {int air date}
+    , (4, 5, PTInt) -- {int4 special ep count}
+    , (4, 6, PTInt) -- {int4 highest episode number}
+    , (4, 7, PTInt) -- {int4 episodes}
+    , (5, 2, PTStrList) -- {str synonym list}
+    , (5, 3, PTStrList) -- {str short name list}
+    , (5, 4, PTStrList) -- {str other name}
+    , (5, 5, PTStr) -- {str english name}
+    , (5, 6, PTStr) -- {str kanji name}
+    , (5, 7, PTStr) -- {str romaji name}
+    , (6, 0, PTStrList) -- {str category weight list}
+    , (6, 1, PTStrList) -- {str category list}
+    , (6, 2, PTStr) -- {str related aid type} - (?)Type Related
+    , (6, 3, PTStrList) -- {str related aid list}
+    , (6, 4, PTStr) -- {str type}
+    , (6, 5, PTStr) -- {str year}
+    , (6, 6, PTDateFlag) -- {int dateflags}
+    , (6, 7, PTInt) -- {int aid}
     ]
