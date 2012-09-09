@@ -1,4 +1,4 @@
-module Anidb.Ed2k
+module Crypto.Hash.Ed2k
     ( init
     , update
     , finalize
@@ -41,7 +41,6 @@ update (Ctx xs) a
         updateHash xs a1 a2
             | B.length a2 == 0  = Ctx (L.init xs ++ [(newHash a1 xs, newLength a1 xs)])
             | otherwise         = update (Ctx (L.init xs ++ [(newHash a1 xs, newLength a1 xs)])) a2
-        
 
 -- Steps
 -- 1. if only one hash in list, return it
