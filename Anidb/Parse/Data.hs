@@ -24,20 +24,33 @@ module Anidb.Parse.Data
     , CharacterType
     , CharacterGender
 
+    , parseAnime
+    , parseFile
+    , ParseVal
+
+    , Mask
+    , MaskType(..)
+    , hexMask
+    , mkMask
+    , mkMaskInt
+    , valididateMask
+
     , AniData
     , ParseError
     ) where
 
 --import qualified Anidb.Parse.Reply as APR
 import Control.Applicative hiding ((<|>), many)
+import Control.Monad (forM)
 import Data.Bits (setBit, testBit, complement, (.&.))
+import Data.List (sortBy)
 import Data.Maybe (catMaybes)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (readTime)
 import Data.Word (Word8, Word64)
+import Numeric (showHex)
 import System.Locale (defaultTimeLocale)
 import Text.ParserCombinators.Parsec
-import qualified Data.IntMap as IntMap
 
 -- Types
 type AniDataParsed = Either ParseError AniData
@@ -160,6 +173,9 @@ data AniData =
         , acType :: CharacterType
         , acGender :: CharacterGender
         }
+    | AniAnime Mask [(Int, ParseVal)]
+    | AniFiles [Integer]
+    | AniFile Mask Mask Integer [(Int, ParseVal)] [(Int, ParseVal)] -- FileMask then ShortAnimeMask
     deriving (Show)
 
 
@@ -367,15 +383,26 @@ parseCharacterGender = do
 
 parseMaybeListBool :: GenParser Char st (Maybe Bool)
 parseMaybeListBool = do
-    int <- optionMaybe (many1 digit)
+    bool <- convertToBool <$> optionMaybe (many1 digit)
     try sls <|> eols
-    return $ parseBool int
+    return bool
     where
-        parseBool Nothing  = Nothing
-        parseBool (Just x) = (case (read x) of
+        convertToBool :: (Maybe String) -> (Maybe Bool)
+        convertToBool Nothing  = Nothing
+        convertToBool (Just x) = (case (read x) of
             0 -> Just False
             1 -> Just True
             _ -> Nothing)
+
+parseBool :: GenParser Char st Bool
+parseBool = do
+    bool <- convertToBool <$> many1 digit
+    eos
+    return bool
+    where
+        convertToBool :: String -> Bool
+        convertToBool "1" = True
+        convertToBool _   = False
 
 parseMaybeListInt :: GenParser Char st (Maybe Integer)
 parseMaybeListInt = do
@@ -393,6 +420,13 @@ parseListInt = do
     try sls <|> eols
     return $ read int
 
+-- TODO: deal with cleaning up the input string ie <br>, etc...
+parseListOfInt :: GenParser Char st [Integer]
+parseListOfInt = do
+    intl <- sepEndBy (read <$> many1 digit) sls
+    eos
+    return intl
+
 -- TODO: deal with case where there's no integer to be parsed out
 parseInt :: GenParser Char st Integer
 parseInt = do
@@ -406,6 +440,13 @@ parseStr = do
     str <- many (noneOf "|\n")
     eos
     return str
+
+-- TODO: deal with cleaning up the input string ie <br>, etc...
+parseListOfStr :: GenParser Char st [String]
+parseListOfStr = do
+    strl <- sepEndBy (many1 (noneOf "\',|\n")) ssls
+    eos
+    return strl
 
 -- TODO: deal with case where there's no timestamp to be parsed out
 -- TODO: deal with case where the timestamp is 0 - "unknown/not disbanded, etc"
@@ -456,6 +497,9 @@ eols = char '\'' <|> char '|' <|> char '\n'
 sls :: GenParser Char st Char
 sls = char ','
 
+ssls :: GenParser Char st Char
+ssls = char ',' <|> char '\''
+
 
 -- Anidb reply parser test
 testCreator :: String
@@ -480,50 +524,82 @@ testCharacter :: String
 testCharacter = "488|ニコ・ロビン|Nico Robin|14789.jpg|4097,2,1900,1'69,2,1901,0'6199,0,1900,1'5691,0,1900,1'2644,0,,'4851,0,1900,1||1236938094|1|F\n"
 
 testAnime :: String
-testAnime = "1|1999-1999|TV Series|Space,Future,Plot Continuity,SciFi,Space Travel,Shipboard,Other Planet,Novel,Genetic Modification,Action,Romance,Military,Large Breasts,Gunfights,Adventure,Human Enhancement,Nudity|Seikai no Monshou|星界の紋章|Crest of the Stars||13|13|3|853|3225|756|110|875|11"
+testAnime = "1|1999-1999|TV Series|Space,Future,Plot Continuity,SciFi,Space Travel,Shipboard,Other Planet,Novel,Genetic Modification,Action,Romance,Military,Large Breasts,Gunfights,Adventure,Human Enhancement,Nudity|Seikai no Monshou|星界の紋章|Crest of the Stars|Testing'Star|13|13|3|853|3225|756|110|875|11\n"
 
 testAnimeMask :: String
 testAnimeMask = "b2f0e0fc000000"
 
----- TODO: Need an idea of what the default anime/file mask is here, also
----- need a short anime mask here
---file :: AN.AniNetState -> FileArg -> FileMask -> FileAnimeMask -> IO APR.AniReplyParsed
----- TODO: do more in depth analysis of the mask
---anime :: AN.AniNetState -> AnimeArg -> Maybe AnimeMask -> IO APR.AniReplyParsed
+testFile :: String
+testFile = "312498|4688|69260|4243|0||0|1|177747474|70cd93fd3981cc80a8ea6a646ff805c9|b2a7c7d591333e20495de3571b235c28|7af9b962c17ff729baeee67533e5219526cd5095|a200fe73|high|DTV|Vorbis (Ogg Vorbis)|104|H264/AVC|800|704x400|japanese|english'english'english|1560||1175472000|26|26|01|The Wings to the Sky|Sora he no Tsubasa|星界の紋章|Nanoha-DGz\n"
 
-parseAnime :: Mask -> String -> Either ParseError (IntMap.IntMap ParseVal)
+testFiles :: String
+testFiles = "312498|4688|69260|4243\n"
+
+testFileMask :: String
+testFileMask = "7ff8fef800"
+
+testShortAnimeMask :: String
+testShortAnimeMask = "d0203080"
+
+
+-- For now have some sort of dummy wrapper that will extract the relevant flag/value out
+-- of the data, but latter i would like to have a records alike syntax or lens like
+-- syntax, perhaps can even just do an automated thin lens wrapper with some sort of
+-- value lookup.
+--
+-- Would need to define a new ADT - one value for each flag and then use that in the
+-- lookup, but at least its not going to be a 50+ parameter record construction....
+--
+-- I think the ADT -> flag bit and value is the best approach so you can like generate
+-- a new flag via yielding up a list of ADT for the relevant data that you are interested
+-- in
+parseAnime :: Mask -> String -> AniDataParsed
 parseAnime mask input = parse (anidbAnime mask) "(unknown)" input
 
-anidbAnime :: Mask -> GenParser Char st (IntMap.IntMap ParseVal)
-anidbAnime mask = do
-    let idx = idxList mask
-        da  = IntMap.empty
-    return da
+parseFile :: Mask -> Mask -> Bool -> String -> AniDataParsed
+parseFile fmask samask multiples input = if multiples
+    then parse anidbFiles "(unknown)" input
+    else parse (anidbFile fmask samask) "(unknown)" input
+
+-- This is a bit of a tricky one, but basically
+-- It takes a list of ParseType and their index from idxList which
+-- operates on the Mask and then execute a parser for that ParseType
+-- and store it all in a list which is returned [(Idx, ParseVal)]
+anidbAnime :: Mask -> GenParser Char st AniData
+anidbAnime mask = AniAnime mask
+    <$> forM (idxList mask) (\(n,t) -> parsingValue t >>= (\v -> return (n, v)))
+
+-- TODO: Improve type safty of this, we have 3 types of masks, should disassocate it
+anidbFile :: Mask -> Mask -> GenParser Char st AniData
+anidbFile fmask samask = AniFile fmask samask
+    <$> parseInt -- {int4 fid}
+    <*> forM (idxList fmask) (\(n,t) -> parsingValue t >>= (\v -> return (n, v)))
+    <*> forM (idxList samask) (\(n,t) -> parsingValue t >>= (\v -> return (n, v)))
+
+anidbFiles :: GenParser Char st AniData
+anidbFiles = AniFiles
+    <$> many1 parseInt -- {int4 fid}
+
+-- This maps from a ParseType to the ParseValue
+parsingValue :: ParseType -> GenParser Char st ParseVal
+parsingValue PTBool      = PVBool <$> parseBool
+parsingValue PTDate      = PVDate <$> parseDate
+parsingValue PTDateFlag  = PVDateFlag <$> parseDateFlag
+parsingValue PTFileState = PVFileState <$> parseStr -- TODO: convert to FileState type
+parsingValue PTInt       = PVInt <$> parseInt
+parsingValue PTIntList   = PVIntList <$> parseListOfInt
+parsingValue PTStr       = PVStr <$> parseStr
+parsingValue PTStrList   = PVStrList <$> parseListOfStr
 
 data ParseVal  = PVInt Integer -- {plain integer}
                | PVIntList [Integer] -- {integer list} - ,
                | PVStr String -- {plain string}
                | PVStrList [String] -- {string list} - ',
-               | PVBool Bool -- {boolean}
+               | PVBool Bool -- {boolean} -- TODO: clean this up
                | PVDate UTCTime -- {UTCTime}
                | PVDateFlag DateFlag -- {DateFlag}
-               | PVFileState String -- {FileState}
+               | PVFileState String -- {FileState} -- TODO: convert to FileState
     deriving (Show)
-
---
--- IntMap
--- k -> (Byte*8+Bit) -> v
--- v -> (ADT - Int/ListInt/Str/ListStr/Bool/Date/etc...)
---
--- Generate a set of index from the mask, then consult the bitmask to see
--- if the value is included, if so, parse and load it into the intMap
---
--- Main trouble will be looking up the "type" to parse it as, looks like we can
--- just use a built/manual intmap (idx -> type)
---
--- Then to extract the desired value just give the idx and out comes the value in the type ADT
---
--- Latter can look into TH to generate nice getter for the intMap
 
 data ParseType = PTInt -- {plain integer}
                | PTIntList -- {integer list} - ,
@@ -533,6 +609,7 @@ data ParseType = PTInt -- {plain integer}
                | PTDate -- {UTCTime}
                | PTDateFlag -- {DateFlag}
                | PTFileState -- {FileState}
+    deriving (Show)
 
 -- TODO: May be able to abstract away MaskType via TypeClass
 data MaskType = ShortAnimeMask | LongAnimeMask | FileMask
@@ -540,6 +617,9 @@ data MaskType = ShortAnimeMask | LongAnimeMask | FileMask
 
 data Mask = Mask MaskType Word64
     deriving (Show)
+
+hexMask :: Mask -> String
+hexMask (Mask _ x) = showHex x ""
 
 mkMask :: MaskType -> String -> Mask
 mkMask a hexstr = Mask a (mkWord64 hexstr)
@@ -549,6 +629,12 @@ mkMask a hexstr = Mask a (mkWord64 hexstr)
         mkWord64 s@('0':'X':_) = fromIntegral (read s) :: Word64
         mkWord64 s             = fromIntegral (read ("0x" ++ s)) :: Word64
 
+mkMaskInt :: MaskType -> [Int] -> Mask
+mkMaskInt a i = Mask a (mkWord64 i)
+    where
+        mkWord64 :: [Int] -> Word64
+        mkWord64 = foldl (\a x -> setBit a x) 0
+
 -- Return True if the mask is known good, False otherwise
 valididateMask :: Mask -> Bool
 valididateMask (Mask m x) = (x .&. complement (idx2Mask $ validMaskField m)) == 0
@@ -557,13 +643,16 @@ valididateMask (Mask m x) = (x .&. complement (idx2Mask $ validMaskField m)) == 
         idx2Mask = foldl (\a (x, y, _) -> setBit a (x*8+y)) 0
 
 -- Generate a list of idx pointers from a mask
-idxList :: Mask -> [Int]
-idxList (Mask m x) = catMaybes $ map (isSet x) (validMaskField m)
+idxList :: Mask -> [(Int, ParseType)]
+idxList (Mask m x) = sortBy myPredicate $ catMaybes $ map (isSet x) (validMaskField m)
     where
-        isSet :: Word64 -> (Int, Int, ParseType) -> Maybe Int
-        isSet a (x, y, _)
-            | testBit a (x*8+y) = Just (x*8+y)
+        isSet :: Word64 -> (Int, Int, ParseType) -> Maybe (Int, ParseType)
+        isSet a (x, y, t)
+            | testBit a (x*8+y) = Just ((x*8+y), t)
             | otherwise         = Nothing
+
+        myPredicate :: (Int, b) -> (Int, b) -> Ordering
+        myPredicate (a1, _) (b1, _) = compare b1 a1
 
 -- Explaination, its (Int, Int), in which it is
 -- Byte x, Bit y - from lsb (rightmost byte 0, bit 0)
@@ -606,7 +695,7 @@ validMaskField FileMask =
     , (1, 3, PTDate) -- {int4 aired date}
     , (1, 4, PTStr) -- {str description}
     , (1, 5, PTInt) -- {int4 length in seconds}
-    , (1, 6, PTStr) -- {str sub language}
+    , (1, 6, PTStrList) -- {str sub language}
     , (1, 7, PTStr) -- {str dub language}
     , (2, 0, PTStr) -- {str file type (extension)}
     , (2, 1, PTStr) -- {str video resolution}
