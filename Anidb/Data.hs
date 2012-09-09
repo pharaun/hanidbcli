@@ -19,9 +19,11 @@ module Anidb.Data
     , groupStatus
     ) where
 
+import Control.Applicative ((<$>))
+import Control.Monad (liftM)
 import qualified Anidb.Network as AN
-import qualified Anidb.Parse.Reply as APR
 import qualified Anidb.Parse.Data as APD
+import qualified Anidb.Parse.Reply as APR
 
 -- Type def
 data GroupArg = GroupName String | GroupID Integer
@@ -42,47 +44,81 @@ data FileArg = FileID Integer
              | FileHash String Integer
              | FileAnimeGroup AnimeArg GroupArg Integer
 
-
 -- Deals with the creator data type/response
-creator :: AN.AniNetState -> Integer -> IO APR.AniReplyParsed
+creator :: AN.AniNetState -> Integer -> IO (APR.AniReplyParsed, Maybe APD.AniDataParsed)
 creator netState cid = do
     reply <- AN.getData netState "CREATOR" [AN.CreatorID cid]
-    return reply
+    return $ maybe (reply, Nothing) (\x -> (reply, Just $ APD.parseCreator x)) (APR.getBodyData reply)
 
 -- TODO: get confirmation on the syntax of the episode list
 -- Deals with the character data type/response
-character :: AN.AniNetState -> Integer -> IO APR.AniReplyParsed
+character :: AN.AniNetState -> Integer -> IO (APR.AniReplyParsed, Maybe APD.AniDataParsed)
 character netState cid = do
     reply <- AN.getData netState "CHARACTER" [AN.CharacterID cid]
-    return reply
+    return $ maybe (reply, Nothing) (\x -> (reply, Just $ APD.parseCharacter x)) (APR.getBodyData reply)
 
 -- Calendar
-calendar :: AN.AniNetState -> IO APR.AniReplyParsed
+calendar :: AN.AniNetState -> IO (APR.AniReplyParsed, Maybe APD.AniDataParsed)
 calendar netState = do
     reply <- AN.getData netState "CALENDAR" []
-    return reply
+    return $ maybe (reply, Nothing) (\x -> (reply, Just $ APD.parseCalendar x)) (APR.getBodyData reply)
 
-animeDesc :: AN.AniNetState -> Integer -> IO APR.AniReplyParsed
-animeDesc netState aid = do
-    reply <- AN.getData netState "ANIMEDESC" [AN.AnimeID aid, AN.DescPart 0]
-    -- TODO: Add more logic to fetch all parts and merge em here, otherwise return
-    return reply
 
-group :: AN.AniNetState -> GroupArg -> IO APR.AniReplyParsed
-group netState (GroupName x) = AN.getData netState "GROUP" [AN.GroupName x]
-group netState (GroupID x)   = AN.getData netState "GROUP" [AN.GroupID x]
+-- TODO: Consider error reporting - IE Either (Either ParseError AniReply) String
+animeDesc :: AN.AniNetState -> Integer -> IO String
+animeDesc netState aid = concat <$> fetchParts 0
+    where
+        fetchParts :: Integer -> IO [String]
+        fetchParts part = do
+            reply <- AN.getData netState "ANIMEDESC" [AN.AnimeID aid, AN.DescPart part]
+
+            flip (maybe (return [])) (APR.getBodyData reply) (\x -> do
+                let desc = APD.parseAnimeDesc x
+                    val  = extractVal desc
+
+                if (moreParts desc)
+                then (\s -> return $ [val] ++ s) =<< (fetchParts (part + 1))
+                else return [val])
+
+        moreParts :: APD.AniDataParsed -> Bool
+        moreParts (Left _)  = False
+        moreParts (Right x) = (APD.adCurrentPart x + 1) < APD.adMaxPart x
+
+        extractVal :: APD.AniDataParsed -> String
+        extractVal (Left _)  = ""
+        extractVal (Right x) = APD.adDescription x
+
+
+group :: AN.AniNetState -> GroupArg -> IO (APR.AniReplyParsed, Maybe APD.AniDataParsed)
+group netState x = do
+    reply <- AN.getData netState "GROUP" (getParm x)
+    return $ maybe (reply, Nothing) (\x -> (reply, Just $ APD.parseGroup x)) (APR.getBodyData reply)
+    where
+        getParm :: GroupArg -> [AN.RequestOpt]
+        getParm (GroupName x) = [AN.GroupName x]
+        getParm (GroupID x)   = [AN.GroupID x]
 
 
 -- TODO: get an actual sample of the syntax for the ep list
-groupStatus :: AN.AniNetState -> Integer -> Maybe Integer -> IO APR.AniReplyParsed
-groupStatus netState aid Nothing      = AN.getData netState "GROUPSTATUS" [AN.AnimeID aid]
-groupStatus netState aid (Just state) = AN.getData netState "GROUPSTATUS" [AN.AnimeID aid, AN.AnimeCompletionState state]
+groupStatus :: AN.AniNetState -> Integer -> Maybe Integer -> IO (APR.AniReplyParsed, Maybe APD.AniDataParsed)
+groupStatus netState aid state = do
+    reply <- AN.getData netState "GROUPSTATUS" (getParm aid state)
+    return $ maybe (reply, Nothing) (\x -> (reply, Just $ APD.parseGroupStatus x)) (APR.getBodyData reply)
+    where
+        getParm :: Integer -> Maybe Integer -> [AN.RequestOpt]
+        getParm aid Nothing  = [AN.AnimeID aid]
+        getParm aid (Just x) = [AN.AnimeID aid, AN.AnimeCompletionState x]
 
 
-episode :: AN.AniNetState -> EpisodeArg -> IO APR.AniReplyParsed
-episode netState (EpisodeID eid)               = AN.getData netState "EPISODE" [AN.EpisodeID eid]
-episode netState (EpisodeAnimeID aid epno)     = AN.getData netState "EPISODE" [AN.AnimeID aid, AN.EpisodeNO epno]
-episode netState (EpisodeAnimeName aname epno) = AN.getData netState "EPISODE" [AN.AnimeName aname, AN.EpisodeNO epno]
+episode :: AN.AniNetState -> EpisodeArg -> IO (APR.AniReplyParsed, Maybe APD.AniDataParsed)
+episode netState x = do
+    reply <- AN.getData netState "EPISODE" (getParm x)
+    return $ maybe (reply, Nothing) (\x -> (reply, Just $ APD.parseEpisode x)) (APR.getBodyData reply)
+    where
+        getParm :: EpisodeArg-> [AN.RequestOpt]
+        getParm (EpisodeID eid)               = [AN.EpisodeID eid]
+        getParm (EpisodeAnimeID aid epno)     = [AN.AnimeID aid, AN.EpisodeNO epno]
+        getParm (EpisodeAnimeName aname epno) = [AN.AnimeName aname, AN.EpisodeNO epno]
 
 
 -- TODO: do more in depth analysis of the mask

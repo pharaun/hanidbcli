@@ -35,7 +35,6 @@ main = do
 
     forkChild ((threadDelay 8000000) >> (putStrLn "8") >> (animeDesc a 3169) >>= (putStrLn . show))
     forkChild ((threadDelay 8000000) >> (putStrLn "8") >> (animeDesc a 1) >>= (putStrLn . show))
-    forkChild ((threadDelay 8000000) >> (putStrLn "8") >> (animeDesc a 2) >>= (putStrLn . show))
 
     forkChild ((threadDelay 9000000) >> (putStrLn "9") >> (group a $ D.GroupID 7091) >>= (putStrLn . show))
     forkChild ((threadDelay 9000000) >> (putStrLn "9") >> (group a $ D.GroupID 3169) >>= (putStrLn . show))

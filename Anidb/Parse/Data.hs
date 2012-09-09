@@ -35,7 +35,7 @@ module Anidb.Parse.Data
     , mkMaskInt
     , valididateMask
 
-    , AniData
+    , AniData(..)
     , ParseError
     ) where
 

@@ -8,6 +8,7 @@ module Anidb.Parse.Reply
 
     , getSession
     , getTag
+    , getBodyData
     ) where
 
 import Data.Char (isSpace)
@@ -61,6 +62,10 @@ getSession (Right x) = getHdrSes (hData x)
 getTag :: AniReplyParsed -> Maybe String
 getTag (Left _)  = Nothing
 getTag (Right x) = hTag x
+
+getBodyData :: AniReplyParsed -> Maybe String
+getBodyData (Left _) = Nothing
+getBodyData (Right (AniReply {bData=x})) = x
 
 
 -- Test parser wrapper for dealing with compressed data,
