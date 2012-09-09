@@ -1,0 +1,28 @@
+name:                hAnidbCli
+version:             0.1.0.0
+synopsis:            This is a haskell AniDB library and simple cli app
+description:         Basically this is an AniDB library which provides a simple interface to AniDB and it also comes with a set of executables which wraps around the library and spins it up as a service and has a simple cli application that interacts with it.
+homepage:            http://amrutlar.com
+license:             LGPL-2.1
+license-file:        LICENSE
+author:              Pharaun
+maintainer:          pharaun666@gmail.com
+category:            Web
+build-type:          Simple
+cabal-version:       >=1.8
+
+executable hanidbcli
+    main-is:        hAnidbCli.hs
+    ghc-options:    -Wall -threaded -O2
+    -- other-modules:
+    build-depends:  base ==4.5.*
+                    , cryptohash ==0.7.*
+                    , bytestring ==0.9.*
+                    , network ==2.3.*
+                    , HTTP ==4000.2.*
+                    , containers ==0.4.*
+                    , parsec ==3.1.*
+                    , utf8-string ==0.3.*
+                    , zlib ==0.5.*
+                    , time ==1.4.*
+                    , old-locale ==1.0.*
