@@ -18,31 +18,31 @@ tests = TestList [
         ~: (MD4.hash full1) ~=? (E.hash full1)
     , "2x Full Block"
         ~:  (MD4.hash (MD4.hash full1 `B.append` MD4.hash full2))
-        ~=? (E.finalize (E.update (E.update (E.init) full1) full2))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) full1) full2))
     , "Double Full Block"
         ~:  (MD4.hash (MD4.hash full1 `B.append` MD4.hash full2))
-        ~=? (E.finalize (E.update E.init (full1 `B.append` full2)))
+        ~=? (E.finalizeEd2k (E.updateEd2k E.initEd2k (full1 `B.append` full2)))
     , "Full Block and Half Block"
         ~:  (MD4.hash (MD4.hash full1 `B.append` MD4.hash half1))
-        ~=? (E.finalize (E.update E.init (full1 `B.append` half1)))
+        ~=? (E.finalizeEd2k (E.updateEd2k E.initEd2k (full1 `B.append` half1)))
     , "2x Quarter Block"
         ~:  (MD4.hash (quarter1 `B.append` quarter2))
-        ~=? (E.finalize (E.update (E.update (E.init) quarter1) quarter2))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) quarter1) quarter2))
     , "2x Half Block"
         ~:  (MD4.hash (half1 `B.append` half2))
-        ~=? (E.finalize (E.update (E.update (E.init) half1) half2))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) half1) half2))
     , "3x Half Block"
         ~:  (MD4.hash ((MD4.hash (half1 `B.append` half2)) `B.append` (MD4.hash half3)))
-        ~=? (E.finalize (E.update (E.update (E.update (E.init) half1) half2) half3))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) half1) half2) half3))
     , "4x Half Block"
         ~:  (MD4.hash ((MD4.hash (half1 `B.append` half2)) `B.append` (MD4.hash (half3 `B.append` half4))))
-        ~=? (E.finalize (E.update (E.update (E.update (E.update (E.init) half1) half2) half3) half4))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) half1) half2) half3) half4))
     , "Half Block and Full Block"
         ~:  (MD4.hash ((MD4.hash (half1 `B.append` half2)) `B.append` (MD4.hash half3)))
-        ~=? (E.finalize (E.update (E.update (E.init) half1) (half2 `B.append` half3)))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) half1) (half2 `B.append` half3)))
     , "Half Block and Full Block and Half Block"
         ~:  (MD4.hash ((MD4.hash (half1 `B.append` half2)) `B.append` (MD4.hash (half3 `B.append` half4))))
-        ~=? (E.finalize (E.update (E.update (E.update (E.init) half1) (half2 `B.append` half3)) half4))
+        ~=? (E.finalizeEd2k (E.updateEd2k (E.updateEd2k (E.updateEd2k (E.initEd2k) half1) (half2 `B.append` half3)) half4))
     ]
     where
         empty = C.pack ""
