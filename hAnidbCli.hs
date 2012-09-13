@@ -27,12 +27,18 @@ import qualified Data.ByteString.Lazy as BS
 import System.IO
 import Control.Exception (bracket, evaluate)
 
+-- Strictness
+import Control.DeepSeq
+
+instance NFData Ctx where
+    rnf a = a `seq` ()
+
 main :: IO ()
 main = do
     let file = "test.mkv"
 
     mapM_ (\path -> bracket (openFile path ReadMode) hClose (\fh -> do
-        z <- foreach fh initEd2k
+        z <- foreach fh $!! initEd2k
         --z <- finalizeEd2k $ foldl updateEd2k initEd2k
         putStrLn $ fileLine path z
         )) [file]
@@ -41,11 +47,11 @@ main = do
         foreach :: Handle -> Ctx -> IO S.ByteString
         foreach fh ctx = do
             a <- S.hGet fh (9500*1024)
-            evaluate (finalizeEd2k ctx)
---            putStrLn $ fileLine "foo" (finalizeEd2k ctx)
             case S.null a of
                 True  -> return $ finalizeEd2k ctx
-                False -> foreach fh (updateEd2k ctx a)
+                -- Then also a deepseq here to force the foreach to release
+                -- the chunks of bytestring that it wants to rentain
+                False -> foreach fh $!! (updateEd2k ctx a)
 
 --    mapM_ (\path -> putStrLn . fileLine path =<< BS.readFile path) [file]
 
