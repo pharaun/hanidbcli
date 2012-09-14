@@ -2,8 +2,12 @@
 import Data.Word (Word8)
 import Numeric (showHex)
 
+import Control.Applicative
+
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
+import qualified Data.List as L
+import Control.Parallel.Strategies
 
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HMap
@@ -30,19 +34,56 @@ import Control.Exception (bracket, evaluate)
 -- Strictness
 import Control.DeepSeq
 
+-- Benchmarks
+import Criterion.Main
+
+-- MD4 parallel impl
+import qualified Crypto.Hash.MD4 as MD4
+
+-- MMap'd file
+import System.IO.Posix.MMap.Lazy
+
 instance NFData Ctx where
     rnf a = a `seq` ()
 
+testFile :: FilePath
+testFile = "test.mkv"
+
 main :: IO ()
 main = do
-    let file = "test.mkv"
+    putStrLn "Warmup"
+    a <- test1 testFile
+    putStrLn a
+    a <- test3 testFile
+    putStrLn a
 
-    mapM_ (\path -> bracket (openFile path ReadMode) hClose (\fh -> do
-        z <- foreach fh $!! initEd2k
-        --z <- finalizeEd2k $ foldl updateEd2k initEd2k
-        putStrLn $ fileLine path z
-        )) [file]
+--    defaultMain
+--        [ bgroup "ed2k list hash"
+----            [ bench "ed2k foreach" $ nf test1
+----            [ bench "ed2k conduit" $ test2 testFile
+----            [ bench "ed2k foreach" $ test1 testFile
+--            [ bench "ed2k parMap" $ test3 testFile >>= putStrLn
+--            ]
+--        ]
 
+
+
+-- TODO: this gets great performance but hashes in 32kB chunks not 9.27MiB chunks
+-- Solution seems to be forking LazyByteString to use 9.27 MiB chunks with forked mmap.lazy
+test3 :: FilePath -> IO String
+test3 file = do
+    d <- unsafeMMapFile file
+    let ctxs = parMap rdeepseq MD4.hash (BS.toChunks d)
+        ctx  = L.foldl' MD4.update MD4.init ctxs
+    return $ fileLine file $ MD4.finalize ctx
+
+
+
+-- Doing the IO myself, in managed strict hGet (9.27MiB) chunks
+test1 :: FilePath -> IO (String)
+test1 file = do
+    t <- mapM (\path -> bracket (openFile path ReadMode) hClose (\fh -> foreach fh initEd2k)) [file]
+    return $ fileLine file $ head t
     where
         foreach :: Handle -> Ctx -> IO S.ByteString
         foreach fh ctx = do
@@ -53,35 +94,21 @@ main = do
                 -- the chunks of bytestring that it wants to rentain
                 False -> foreach fh $!! (updateEd2k ctx a)
 
---    mapM_ (\path -> putStrLn . fileLine path =<< BS.readFile path) [file]
+
+-- Using conduit hashFile -- Still unusably slow
+test2 :: FilePath -> IO (String)
+test2 file = do
+    digest <- hashFile file
+    let hash = toHex . encode $ (digest :: ED2K)
+    return $ fileLine file hash
+
+
 
 fileLine :: FilePath -> S.ByteString -> String
 fileLine path c = hash c ++ " " ++ path
 
 hash :: S.ByteString -> String
-hash = show . toHex-- . hashlazy
-
---main :: IO ()
---main = do
---    let folder = "./test/a.mkv"
---
---    digest <- hashFile folder
---    let hash = toHex . encode $ (digest :: ED2K)
---    putStrLn $ show hash
-
---    md5Map <- buildMap $ decodeString folder
---    (putStrLn . show) `mapM_` md5Map
---
---buildMap :: FilePath -> IO [(S.ByteString, FilePath)]
---buildMap dir =
---    traverse False dir $$ CL.foldM addFP []
---  where
---    addFP :: [(S.ByteString, FilePath)] -> FilePath -> IO [(S.ByteString, FilePath)]
---    addFP hmap fp = do
---        digest <- runResourceT $ sourceFile fp $$ sinkHash
---        let hash = toHex . encode $ (digest :: ED2K)
---        putStrLn $ show hash
---        return $ hmap ++ [(hash, fp)]
+hash = show . toHex
 
 -- Overall, this function is pretty inefficient. Writing an optimized version
 -- in terms of unfoldR is left as an exercise to the reader.
