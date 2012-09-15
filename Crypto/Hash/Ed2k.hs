@@ -30,12 +30,12 @@ import Data.Tagged (Tagged(..))
 import qualified Crypto.Classes as C (Hash(..))
 
 -- Strictness
---import Control.Seq
 import Control.DeepSeq
 
 instance C.Hash Ctx ED2K where
     outputLength    = Tagged (digestSize * 8)
-    blockLength     = Tagged (blockSize * 8) -- 9.27 MiB Blocks
+--    blockLength     = Tagged (blockSize * 8) -- 9.27 MiB Blocks - (Implodes performance to abysmal level)
+    blockLength     = Tagged ((40 * 1024) * 8) -- fastest performance with conduit
     initialCtx      = initEd2k
     updateCtx       = updateEd2k
     finalize ctx bs = Digest . finalizeEd2k $ updateEd2k ctx bs
@@ -51,54 +51,60 @@ blockSize = 9500 * 1024
 digestSize :: Int
 digestSize = 16
 
-data Ctx = Ctx ![(MD4.Ctx, Int)]
+-- Master md4, total, child MD4, consumed to date
+data Ctx = Ctx !MD4.Ctx !Int !MD4.Ctx !Int
 data ED2K = Digest !B.ByteString
     deriving (Eq, Ord, Show)
 
+-- Needed for deepseq and strictness
 instance NFData B.ByteString where
     rnf a = a `seq` ()
 
 instance NFData MD4.Ctx where
     rnf a = a `seq` ()
 
+instance NFData Ctx where
+    rnf a = a `seq` ()
+
 initEd2k :: Ctx
-initEd2k = Ctx [(MD4.init, 0)]
+initEd2k = Ctx MD4.init 0 MD4.init 0
 
 -- Steps
--- 1. grab last element in list, see what its length is
+-- 1. See how much data the child has consumed
 -- 2. if less than blockSize, append more data up to blockSize
 --  a. split the bytestring, feed the remaintant into hash
 --  b. if there's more left, call update again and repeat
--- 3. if exactly blockSize, create a new tuple, call update
+-- 3. if exactly blockSize, roll child into master, update master #, reset child to 0 and re-init
 updateEd2k :: Ctx -> B.ByteString -> Ctx
-updateEd2k (Ctx xs) a
-    | lengthFrom xs < blockSize = uncurry (updateHash xs) (split xs a)
-    | otherwise                 = updateEd2k (Ctx (xs ++ [(MD4.init, 0)])) a
+updateEd2k xs@(Ctx _ _ _ cl) a
+    | cl < blockSize = uncurry (updateHash xs) (split xs a)
+    | otherwise      = updateEd2k (updateMasterCtx xs) a
+
     where
-        lengthFrom xs = snd $ L.last xs
-        split xs = B.splitAt (blockSize - lengthFrom xs)
-        newHash a xs = MD4.update (fst $ L.last xs) a
-        newLength a xs = lengthFrom xs + B.length a
+        split :: Ctx -> B.ByteString -> (B.ByteString, B.ByteString)
+        split (Ctx _ _  _ cl) = B.splitAt (blockSize - cl)
 
-        -- A deepseq worked here because it reduced each element in the list
-        -- via a seq for the MD4.Ctx to rnf, now we don't hold on to the
-        -- bytestring here
-        newCtx a xs = Ctx $!! (L.init xs ++ [(newHash a xs, newLength a xs)])
+        updateMasterCtx :: Ctx -> Ctx
+        updateMasterCtx (Ctx m ml c cl) = Ctx (MD4.update m (MD4.finalize c)) (ml + cl) MD4.init 0
 
+        updateChildCtx :: Ctx -> B.ByteString -> Ctx
+        updateChildCtx (Ctx m ml c cl) a = Ctx m ml (MD4.update c a) (cl + B.length a)
+
+        updateHash :: Ctx -> B.ByteString -> B.ByteString -> Ctx
         updateHash xs a1 a2
-            | B.length a2 == 0  = newCtx a1 xs
-            | otherwise         = updateEd2k (newCtx a1 xs) a2
+            | B.length a2 == 0  = updateChildCtx xs a1
+            | otherwise         = updateEd2k (updateChildCtx xs a1) a2
 
 -- Steps
--- 1. if only one hash in list, return it
--- 2. otherwise roll up all of the hash into a master hash and return it
+-- 1. if master length is 0 finalize and return child
+-- 2. otherwise roll up the child into master and finalize and return master
 finalizeEd2k :: Ctx -> B.ByteString
-finalizeEd2k (Ctx xs)
-    | L.length xs == 1  = MD4.finalize (fst $ L.head xs)
-    | otherwise         = MD4.finalize (foldl MD4.update MD4.init ((MD4.finalize . fst) <$> xs)) -- TODO: also make this strict i think (foldl is non-strict, maybe foldl')
+finalizeEd2k (Ctx m ml c _)
+    | ml == 0   = MD4.finalize c
+    | otherwise = MD4.finalize (MD4.update m (MD4.finalize c))
 
 hash :: B.ByteString -> B.ByteString
 hash = finalizeEd2k . updateEd2k initEd2k
 
 hashlazy :: BL.ByteString -> B.ByteString
-hashlazy l = finalizeEd2k $ foldl updateEd2k initEd2k (BL.toChunks l) -- TODO: probably make the foldl into foldl' to be strict on the hashing/evalulation
+hashlazy l = finalizeEd2k $ L.foldl' updateEd2k initEd2k (BL.toChunks l)
