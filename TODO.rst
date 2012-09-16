@@ -72,3 +72,18 @@ Then a thread basially generates a tag, and a mvar and put it into the
 list, then it sends the message and takes from the mvar parseddata and blocks
 till the reciever thread gets the data and parse + match it to the tag and
 put it into the mvar table
+
+
+
+
+
+
+NEXT PHASE:
+
+Implement a hashing service (request file to hash, poll for status, retrieve hash)
+
+Implement a client/server arch with hasher/network/anidb in the daemon then a git alike cli interface for interacting with the service
+
+eventually implement a file move/rename service for cleaning up the files/etc
+
+make sure to do this in a secure manner, such as dropping privs to the lowest, restrict to trusted ip, etc...
