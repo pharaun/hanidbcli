@@ -1,8 +1,10 @@
 import HClient.Options
+import HClient.Hasher (fileDirectoryHash)
 import System.Console.CmdArgs
 
-testFile :: FilePath
-testFile = "test.mkv"
-
 main :: IO ()
-main = print =<< cmdArgsRun optionMode
+main = parseOptions =<< cmdArgsRun optionMode
+
+parseOptions :: Options -> IO ()
+parseOptions (Hash x) = print =<< fileDirectoryHash x
+parseOptions x        = print x

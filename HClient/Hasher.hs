@@ -1,77 +1,80 @@
+module HClient.Hasher
+    ( fileHash
+    , directoryHash
+    , fileDirectoryHash
+    ) where
+
+import Control.Applicative ((<$>))
+import Control.DeepSeq (($!!))
+import Control.Exception (bracket)
 import Data.Word (Word8)
 import Numeric (showHex)
-
-import Control.Applicative
-
-import qualified Data.ByteString as S
-import qualified Data.ByteString.Char8 as S8
-
-import qualified Crypto.Hash.Ed2k as E
-
-import qualified Data.ByteString.Lazy as BS
 import System.IO
-import Control.Exception (bracket)
+import qualified Crypto.Hash.Ed2k as E
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
+import Control.Monad
 
--- Strictness
-import Control.DeepSeq
+import System.Posix.Files (getFileStatus, isRegularFile, isDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
+import System.FilePath ((</>))
 
--- Conduit
-import Data.Conduit (($$), runResourceT)
-import Data.Conduit.Filesystem (sourceFile, traverse)
-import Crypto.Conduit (sinkHash, hashFile)
-import Data.Serialize (encode)
+fileDirectoryHash :: [FilePath] -> IO [(FilePath, String)]
+fileDirectoryHash paths = concat <$> forM paths (\path -> do
+        fs <- getFileStatus path
 
+        if isRegularFile fs
+        then (fileHash [path] >>= return)
+        else if isDirectory fs
+            then (directoryHash [path] >>= return)
+            else return [(path, "")])
 
-main :: IO ()
-main = do
-    putStrLn "Warmup"
-    a <- test1 testFile
-    putStrLn a
-    a <- test2 testFile
-    putStrLn a
-
-
--- Doing the IO myself, in managed strict hGet (9.27MiB) chunks
-test1 :: FilePath -> IO (String)
-test1 file = do
-    t <- mapM (\path -> bracket (openFile path ReadMode) hClose (\fh -> foreach fh E.initEd2k)) [file]
-    return $ fileLine file $ head t
+-- This is terrible, as is fileDirectoryHash but it'll work for now
+directoryHash :: [FilePath] -> IO [(FilePath, String)]
+directoryHash dirs = concat <$> forM dirs getRecursiveContents
     where
-        foreach :: Handle -> E.Ctx -> IO S.ByteString
+        getRecursiveContents :: FilePath -> IO [(FilePath, String)]
+        getRecursiveContents topdir = do
+            a <- properNames topdir
+            concat <$> forM a (\name -> do
+                let path = topdir </> name
+                fs <- getFileStatus path
+                if isDirectory fs
+                then getRecursiveContents path
+                else (fileHash [path] >>= return))
+            where
+                properNames topdir = do
+                    names <- getDirectoryContents topdir
+                    return $ filter (`notElem` [".", ".."]) names
+
+
+-- Doing the IO myself, in managed strict hGet (1MiB chunks)
+fileHash :: [FilePath] -> IO [(FilePath, String)]
+fileHash files = forM files (\path -> do
+        hash <- bracket (openFile path ReadMode) hClose (\fh -> foreach fh E.initEd2k)
+        return $ fileLine path hash)
+    where
+        foreach :: Handle -> E.Ctx -> IO B.ByteString
         foreach fh ctx = do
             let size = 1024 * 1024 -- Found via trial runs (1MiB)
-            a <- S.hGet fh size
-            case S.null a of
+            a <- B.hGet fh size
+            case B.null a of
                 True  -> return $ E.finalizeEd2k ctx
                 -- Then also a deepseq here to force the foreach to release
                 -- the chunks of bytestring that it wants to rentain
                 False -> foreach fh $!! (E.updateEd2k ctx a)
 
--- Conduit - Ed2k
-test2 :: FilePath -> IO (String)
-test2 file = do
-    digest <- hashFile file
-    let hash = toHex . encode $ (digest :: E.ED2K)
-    return $ fileLine file hash
+fileLine :: FilePath -> B.ByteString -> (FilePath, String)
+fileLine path hash = (path, (show $ toHex hash))
 
+-- TODO: fix this up, this is inefficient, write it in unfoldR
+toHex :: B.ByteString -> B.ByteString
+toHex = B.concatMap word8ToHex
+    where
+        word8ToHex :: Word8 -> B.ByteString
+        word8ToHex w = C.pack $ pad $ showHex w []
 
-
-fileLine :: FilePath -> S.ByteString -> String
-fileLine path c = hash c ++ " " ++ path
-
-hash :: S.ByteString -> String
-hash = show . toHex
-
--- Overall, this function is pretty inefficient. Writing an optimized version
--- in terms of unfoldR is left as an exercise to the reader.
-toHex :: S.ByteString -> S.ByteString
-toHex =
-    S.concatMap word8ToHex
-  where
-    word8ToHex :: Word8 -> S.ByteString
-    word8ToHex w = S8.pack $ pad $ showHex w []
-
-    -- We know that the input will always be 1 or 2 characters long.
-    pad :: String -> String
-    pad [x] = ['0', x]
-    pad s   = s
+        -- We know that the input will always be 1 or 2 characters long.
+        pad :: String -> String
+        pad [x] = ['0', x]
+        pad s   = s
