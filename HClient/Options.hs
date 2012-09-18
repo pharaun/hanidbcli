@@ -37,8 +37,8 @@ import System.Console.CmdArgs
 
 data Options = Start
              | Stop { force :: Bool }
-             | Hash { paths :: [FilePath] }
-             | Sync
+             | Hash { hashPaths :: [FilePath] }
+             | Sync { syncPaths :: [FilePath] }
              | Dump { cache :: Bool }
              | Status
              | List
@@ -53,7 +53,9 @@ stop = Stop
      } &= help "Stop the service daemon."
 
 sync :: Options
-sync = Sync &= help "Sync the meta-data store with the filesystem."
+sync = Sync
+     { syncPaths = def &= args &= typ "PATHS"
+     } &= help "Sync the meta-data store with the filesystem."
 
 dump :: Options
 dump = Dump
@@ -68,7 +70,7 @@ list = List &= help "List the series being managed and their status."
 
 hash :: Options
 hash = Hash
-     { paths = def &= args &= typ "PATHS"
+     { hashPaths = def &= args &= typ "PATHS"
      } &= help "Create one or more Ed2k file hash."
 
 optionMode :: Mode (CmdArgs Options)
