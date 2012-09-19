@@ -1,8 +1,6 @@
+{-# LANGUAGE DeriveDataTypeable, StandaloneDeriving #-}
 module HClient.Sync
-    ( fileSync
-    , directorySync
-    , fileDirectorySync
-
+    ( fileDirectorySync
     , UniqueFile(..)
     ) where
 
@@ -10,69 +8,98 @@ import Control.Applicative ((<$>))
 import Control.DeepSeq (($!!))
 import System.IO
 import Control.Monad
+import qualified Data.IxSet as IS
+import Data.Data (Data, Typeable)
 
-import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory, deviceID, fileID, fileSize)
-import System.Posix.Types (DeviceID, FileID, FileOffset)
+import System.Posix.Types
+import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory, deviceID, fileID, fileSize, FileStatus)
 import System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
 import System.FilePath ((</>))
 
--- "Machine unique" file identifier with some additional info such as size and hash
+-- "Posix Unique" File identifier along with file size and maybe a hash of the file
 data UniqueFile = UniqueFile FilePath FileID DeviceID FileOffset (Maybe String)
-    deriving (Show)
+    deriving (Eq, Ord, Show, Data, Typeable)
 
--- Steps to detect if a file is new or not based off fileid/deviceid is:
--- Using IxSet i think (storing the index/metadata in acid-state)
---
--- 1. Load the IxSet of known/processed files
--- 2. Farm the filesystem and for each file check to see if its in the IxSet via
---  a. Winnow down IxSet by DeviceID
---  b. Winnow down IxSet by FileID
---  c. If exists then (probably can ignore/proceed on)
---  d. If not exist then add to a list of file that needs to be processed
+-- TODO: extract the Word* value out of these and store it into my own unique newtype
+deriving instance Data COff -- FileOffset
+deriving instance Data CDev -- DeviceID
+deriving instance Data CIno -- FileID
+
+-- 1. Load the IxSet of known/processed files from acid-state
+-- 2. Process it
 --  - Disclaimer this only works for file on the same device id, if there's multiple
 --  - file on other devices, the only way to deal with these is to actually hash/1:1
 --  - compare the files, in this case hasing is probably adequate.
--- 3. Can probably start processing the files in (2d) here
 -- 4. Should have some basic cross device/fs detection, ex we have to process the hash
 --    of all files anyway, so might as well do some quick duplication detection and warn
 --    user of duplicates/store info on who/which files duplicates which
---
--- 5. Should also deal with files that has been deleted, for this we would need to build
---    up an entire set of processed (new) plus existing file and find the files that do not
---    exist.
---
---    - Can probably do that during step 2a-d via  having a "dynamic?" set that over time has
---    - entries removed out of it so that when all done what's left is the deleted/unavailable
---    - files
+instance IS.Indexable UniqueFile where
+    empty = IS.ixSet
+        [ IS.ixGen (IS.Proxy :: IS.Proxy FileID)
+        , IS.ixGen (IS.Proxy :: IS.Proxy DeviceID)
+        ]
 
-fileSync :: [FilePath] -> IO [UniqueFile]
-fileSync = fileDirectorySync
+-- IxSet Tuple of (known files, new files)
+type SyncSet = (IS.IxSet UniqueFile, IS.IxSet UniqueFile)
 
-fileDirectorySync :: [FilePath] -> IO [UniqueFile]
-fileDirectorySync paths = concat <$> forM paths (\path -> do
-        -- TODO: figure out a good approach for dealing with hard and symbolic links
-        fs <- getSymbolicLinkStatus path
+initSyncSet :: (IS.IxSet UniqueFile) -> SyncSet
+initSyncSet k = (k, IS.empty)
 
-        if isRegularFile fs
-        then return [UniqueFile path (fileID fs) (deviceID fs) (fileSize fs) Nothing]
-        else if isDirectory fs
-            then (directorySync [path] >>= return)
-            else return [])
+-- Updates the SyncSet
+-- 1. If new file, update the (new files) set
+-- 2. Otherwise, update the (known files) set
+updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
+updateSyncSet s u = if (isNewFile s u) then updateNewFile s u else updateKnownFile s u
 
-directorySync :: [FilePath] -> IO [UniqueFile]
-directorySync dirs = concat <$> forM dirs getRecursiveContents
+-- 1. Check to see if (known files) set is empty, if so, return True
+-- 2. See if the DeviceID exists, if not, return True
+-- 3. See if the FileID exists, if not, return True
+-- 4. Otherwise, return False
+isNewFile :: SyncSet -> UniqueFile -> Bool
+isNewFile (k, n) u@(UniqueFile _ fid did _ _) =
+    if IS.null k
+    then True
+    else if IS.null (IS.getEQ did k)
+         then True
+         else if IS.null (IS.getEQ fid (IS.getEQ did k))
+              then True
+              else False
+
+updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
+updateKnownFile (k, n) u = ((IS.delete u k), n)
+
+updateNewFile :: SyncSet -> UniqueFile -> SyncSet
+updateNewFile (k, n) u = (k, (IS.insert u n))
+
+
+-- FileSync
+-- 1. If file, update SyncSet
+-- 2. If directory, call DirectorySync
+-- 3. Otherwise, Return original SyncSet
+fileSync :: SyncSet -> FilePath -> IO SyncSet
+fileSync s p = do
+    -- TODO: figure out a good approach for dealing with hard and symbolic links
+    fs <- getSymbolicLinkStatus p
+
+    if isRegularFile fs
+    then return $ updateSyncSet s $ UniqueFile p (fileID fs) (deviceID fs) (fileSize fs) Nothing
+    else if isDirectory fs
+         then directorySync s p
+         else return s
+
+-- DirectorySync
+-- 1. Fold over the directory and running FileSync on each file/directory
+-- 2. FileSync will recursivly call DirectorySync on directories
+directorySync :: SyncSet -> FilePath -> IO SyncSet
+directorySync s p = foldM fileSync s =<< properNames p
     where
-        getRecursiveContents :: FilePath -> IO [UniqueFile]
-        getRecursiveContents topdir = do
-            a <- properNames topdir
-            concat <$> forM a (\name -> do
-                let path = topdir </> name
-                fs <- getSymbolicLinkStatus path
-                if isDirectory fs
-                then getRecursiveContents path
-                else (fileSync [path] >>= return))
-            where
-                properNames topdir = do
-                    names <- getDirectoryContents topdir
-                    return $ filter (`notElem` [".", ".."]) names
+        properNames topdir = do
+            names <- getDirectoryContents topdir
+            return $ map (topdir </>) $ filter (`notElem` [".", ".."]) names
 
+-- FileDirectorySync
+-- This folds over the provided list of FilePath
+-- Takes a list of filepath, then latter on a IxSet of known file, and returns a
+-- SyncSet
+fileDirectorySync :: [FilePath] -> IO SyncSet
+fileDirectorySync = foldM fileSync (initSyncSet IS.empty)
