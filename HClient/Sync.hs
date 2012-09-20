@@ -4,17 +4,21 @@ module HClient.Sync
     , UniqueFile(..)
     ) where
 
-import Control.Applicative ((<$>))
-import Control.DeepSeq (($!!))
-import System.IO
-import Control.Monad
-import qualified Data.IxSet as IS
+import Control.Monad (foldM)
 import Data.Data (Data, Typeable)
+import Prelude hiding (FilePath)
+import qualified Data.IxSet as IS
+import qualified System.IO as FP
 
-import System.Posix.Types
+-- Conduit
+import Data.Conduit (($$))
+import Data.Conduit.Filesystem (traverse)
+import Filesystem (listDirectory)
+import Filesystem.Path.CurrentOS (FilePath, encodeString, decodeString, (</>))
+import qualified Data.Conduit.List as CL
+
 import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory, deviceID, fileID, fileSize, FileStatus)
-import System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
-import System.FilePath ((</>))
+import System.Posix.Types
 
 -- "Posix Unique" File identifier along with file size and maybe a hash of the file
 data UniqueFile = UniqueFile FilePath FileID DeviceID FileOffset (Maybe String)
@@ -72,34 +76,17 @@ updateNewFile :: SyncSet -> UniqueFile -> SyncSet
 updateNewFile (k, n) u = (k, (IS.insert u n))
 
 
--- FileSync
--- 1. If file, update SyncSet
--- 2. If directory, call DirectorySync
--- 3. Otherwise, Return original SyncSet
-fileSync :: SyncSet -> FilePath -> IO SyncSet
-fileSync s p = do
-    -- TODO: figure out a good approach for dealing with hard and symbolic links
-    fs <- getSymbolicLinkStatus p
+-- Takes a list of FP.FilePath and convert it to real FilePath then fold over it and
+-- send it to directorySync where the real magic happens
+fileDirectorySync :: [FP.FilePath] -> IO SyncSet
+fileDirectorySync p = foldM directorySync (initSyncSet IS.empty) $ map decodeString p
 
-    if isRegularFile fs
-    then return $ updateSyncSet s $ UniqueFile p (fileID fs) (deviceID fs) (fileSize fs) Nothing
-    else if isDirectory fs
-         then directorySync s p
-         else return s
-
--- DirectorySync
--- 1. Fold over the directory and running FileSync on each file/directory
--- 2. FileSync will recursivly call DirectorySync on directories
 directorySync :: SyncSet -> FilePath -> IO SyncSet
-directorySync s p = foldM fileSync s =<< properNames p
-    where
-        properNames topdir = do
-            names <- getDirectoryContents topdir
-            return $ map (topdir </>) $ filter (`notElem` [".", ".."]) names
+directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
+    if isRegularFile fs
+    then fileSync s p
+    else traverse False p $$ CL.foldM fileSync s
 
--- FileDirectorySync
--- This folds over the provided list of FilePath
--- Takes a list of filepath, then latter on a IxSet of known file, and returns a
--- SyncSet
-fileDirectorySync :: [FilePath] -> IO SyncSet
-fileDirectorySync = foldM fileSync (initSyncSet IS.empty)
+fileSync :: SyncSet -> FilePath -> IO SyncSet
+fileSync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
+    return $ updateSyncSet s $ UniqueFile p (fileID fs) (deviceID fs) (fileSize fs) Nothing
