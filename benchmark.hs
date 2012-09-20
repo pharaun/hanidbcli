@@ -1,35 +1,17 @@
 import Data.Word (Word8)
 import Numeric (showHex)
 
-import Control.Applicative
-
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
 
 import qualified Crypto.Hash.Ed2k as E
 
-import qualified Data.ByteString.Lazy as BS
-import System.IO
-import Control.Exception (bracket)
-
--- Strictness
-import Control.DeepSeq
-
 -- Benchmarks
 import Criterion.Main
 
--- Conduit
-import Data.Conduit (($$), runResourceT)
-import Data.Conduit.Filesystem (sourceFile, traverse)
-import Crypto.Conduit (sinkHash, hashFile)
-import Data.Serialize (encode)
+-- Hasher
+import HClient.Hasher (fileDirectoryHash, conduitFileHash)
 
-
---import HClient.Options
---import System.Console.CmdArgs
---
---main :: IO ()
---main = print =<< cmdArgsRun optionMode
 
 testFile :: FilePath
 testFile = "test.mkv"
@@ -38,9 +20,9 @@ main :: IO ()
 main = do
     putStrLn "Warmup"
     a <- test1 testFile
-    putStrLn a
+    putStrLn $ show a
     a <- test2 testFile
-    putStrLn a
+    putStrLn $ show a
 
     defaultMain
         [ bgroup "ed2k list hash"
@@ -51,29 +33,14 @@ main = do
 
 
 -- Doing the IO myself, in managed strict hGet (9.27MiB) chunks
-test1 :: FilePath -> IO (String)
-test1 file = do
-    t <- mapM (\path -> bracket (openFile path ReadMode) hClose (\fh -> foreach fh E.initEd2k)) [file]
-    return $ fileLine file $ head t
-    where
-        foreach :: Handle -> E.Ctx -> IO S.ByteString
-        foreach fh ctx = do
-            let size = 1024 * 1024 -- Found via trial runs (1MiB)
-            a <- S.hGet fh size
-            case S.null a of
-                True  -> return $ E.finalizeEd2k ctx
-                -- Then also a deepseq here to force the foreach to release
-                -- the chunks of bytestring that it wants to rentain
-                False -> foreach fh $!! (E.updateEd2k ctx a)
+test1 :: FilePath -> IO [(FilePath, String)]
+test1 file = fileDirectoryHash [file]
 
 -- Conduit - Ed2k
-test2 :: FilePath -> IO (String)
-test2 file = do
-    digest <- hashFile file
-    let hash = toHex . encode $ (digest :: E.ED2K)
-    return $ fileLine file hash
+test2 :: FilePath -> IO [(FilePath, String)]
+test2 file = conduitFileHash [file]
 
-
+-- Here for next experimental benchmark stuff
 
 fileLine :: FilePath -> S.ByteString -> String
 fileLine path c = hash c ++ " " ++ path

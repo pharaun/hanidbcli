@@ -34,8 +34,12 @@ import Control.DeepSeq
 
 instance C.Hash Ctx ED2K where
     outputLength    = Tagged (digestSize * 8)
---    blockLength     = Tagged (blockSize * 8) -- 9.27 MiB Blocks - (Implodes performance to abysmal level)
-    blockLength     = Tagged ((40 * 1024) * 8) -- fastest performance with conduit
+    -- 9.27 MiB Blocks - (Implodes performance to abysmal level)
+--  blockLength     = Tagged (blockSize * 8)
+    -- Best performance with (4*1024) block sourceFile conduit
+--  blockLength     = Tagged ((40 * 1024) * 8)
+    -- Best performance with (1024*1024) block sourceFile conduit
+    blockLength     = Tagged ((1024 * 1024) * 8)
     initialCtx      = initEd2k
     updateCtx       = updateEd2k
     finalize ctx bs = Digest . finalizeEd2k $ updateEd2k ctx bs

@@ -2,6 +2,8 @@ module HClient.Hasher
     ( fileHash
     , directoryHash
     , fileDirectoryHash
+
+    , conduitFileHash
     ) where
 
 import Control.Applicative ((<$>))
@@ -18,6 +20,13 @@ import Control.Monad
 import System.Posix.Files (getFileStatus, isRegularFile, isDirectory)
 import System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
 import System.FilePath ((</>))
+
+-- Conduit
+import Control.Monad.IO.Class (liftIO, MonadIO)
+import Crypto.Conduit (sinkHash)
+import Data.Conduit (($$), runResourceT, MonadResource, GSource, yield, bracketP)
+import Data.Serialize (encode)
+
 
 fileDirectoryHash :: [FilePath] -> IO [(FilePath, String)]
 fileDirectoryHash paths = concat <$> forM paths (\path -> do
@@ -63,6 +72,26 @@ fileHash files = forM files (\path -> do
                 -- Then also a deepseq here to force the foreach to release
                 -- the chunks of bytestring that it wants to rentain
                 False -> foreach fh $!! (E.updateEd2k ctx a)
+
+-- Doing the IO with a custom (1024*1024) bigblock conduit sourceFile
+conduitFileHash :: [FilePath] -> IO [(FilePath, String)]
+conduitFileHash files = forM files (\path -> do
+        digest <- runResourceT $ bigSourceFile path $$ sinkHash
+        let hash = encode (digest :: E.ED2K)
+        return $ fileLine path hash)
+
+bigSourceFile :: MonadResource m => FilePath -> GSource m B.ByteString
+bigSourceFile file = bracketP (openBinaryFile file ReadMode) hClose sourceHandle
+
+sourceHandle :: MonadIO m => Handle -> GSource m B.ByteString
+sourceHandle h = loop
+    where
+        loop = do
+            bs <- liftIO (B.hGetSome h (1024*1024))
+            if B.null bs
+            then return ()
+            else yield bs >> loop
+
 
 fileLine :: FilePath -> B.ByteString -> (FilePath, String)
 fileLine path hash = (path, (show $ toHex hash))
