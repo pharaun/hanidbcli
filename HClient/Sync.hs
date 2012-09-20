@@ -85,6 +85,7 @@ directorySync :: SyncSet -> FilePath -> IO SyncSet
 directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
     if isRegularFile fs
     then fileSync s p
+    -- TODO: this will get feeded symlinks, and other weird files, may want to exclude these
     else traverse False p $$ CL.foldM fileSync s
 
 fileSync :: SyncSet -> FilePath -> IO SyncSet

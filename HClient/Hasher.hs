@@ -1,9 +1,6 @@
 module HClient.Hasher
-    ( fileHash
-    , directoryHash
-    , fileDirectoryHash
-
-    , conduitFileHash
+    ( fileDirectoryHash
+    , conduitFileDirectoryHash
     ) where
 
 import Control.Applicative ((<$>))
@@ -11,7 +8,7 @@ import Control.DeepSeq (($!!))
 import Control.Exception (bracket)
 import Data.Word (Word8)
 import Numeric (showHex)
-import System.IO
+import System.IO hiding (FilePath)
 import qualified Crypto.Hash.Ed2k as E
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -19,16 +16,25 @@ import Control.Monad
 
 import System.Posix.Files (getFileStatus, isRegularFile, isDirectory)
 import System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
-import System.FilePath ((</>))
+import System.FilePath (combine)
 
 -- Conduit
 import Control.Monad.IO.Class (liftIO, MonadIO)
 import Crypto.Conduit (sinkHash)
-import Data.Conduit (($$), runResourceT, MonadResource, GSource, yield, bracketP)
+import Data.Conduit (($$), (=$), runResourceT, MonadResource, GSource, yield, bracketP)
+import Data.Conduit.Filesystem (traverse)
 import Data.Serialize (encode)
+import qualified Data.Conduit.List as CL
+
+-- Better FilePath
+import Prelude hiding (FilePath)
+import Filesystem (listDirectory)
+import Filesystem.Path.CurrentOS (FilePath, encodeString, decodeString, (</>))
+import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory)
+import qualified System.IO as FP
 
 
-fileDirectoryHash :: [FilePath] -> IO [(FilePath, String)]
+fileDirectoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
 fileDirectoryHash paths = concat <$> forM paths (\path -> do
         fs <- getFileStatus path
 
@@ -39,14 +45,14 @@ fileDirectoryHash paths = concat <$> forM paths (\path -> do
             else return [(path, "")])
 
 -- This is terrible, as is fileDirectoryHash but it'll work for now
-directoryHash :: [FilePath] -> IO [(FilePath, String)]
+directoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
 directoryHash dirs = concat <$> forM dirs getRecursiveContents
     where
-        getRecursiveContents :: FilePath -> IO [(FilePath, String)]
+        getRecursiveContents :: FP.FilePath -> IO [(FP.FilePath, String)]
         getRecursiveContents topdir = do
             a <- properNames topdir
             concat <$> forM a (\name -> do
-                let path = topdir </> name
+                let path = topdir `combine` name
                 fs <- getFileStatus path
                 if isDirectory fs
                 then getRecursiveContents path
@@ -58,7 +64,7 @@ directoryHash dirs = concat <$> forM dirs getRecursiveContents
 
 
 -- Doing the IO myself, in managed strict hGet (1MiB chunks)
-fileHash :: [FilePath] -> IO [(FilePath, String)]
+fileHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
 fileHash files = forM files (\path -> do
         hash <- bracket (openFile path ReadMode) hClose (\fh -> foreach fh E.initEd2k)
         return $ fileLine path hash)
@@ -73,14 +79,29 @@ fileHash files = forM files (\path -> do
                 -- the chunks of bytestring that it wants to rentain
                 False -> foreach fh $!! (E.updateEd2k ctx a)
 
--- Doing the IO with a custom (1024*1024) bigblock conduit sourceFile
-conduitFileHash :: [FilePath] -> IO [(FilePath, String)]
-conduitFileHash files = forM files (\path -> do
-        digest <- runResourceT $ bigSourceFile path $$ sinkHash
-        let hash = encode (digest :: E.ED2K)
-        return $ fileLine path hash)
 
-bigSourceFile :: MonadResource m => FilePath -> GSource m B.ByteString
+-- Takes a list of FP.FilePath and convert it to real FilePath then map over it and
+-- send it to directorySync where the real magic happens
+conduitFileDirectoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
+conduitFileDirectoryHash p = concat <$> (mapM conduitDirectoryHash $ map decodeString p)
+
+conduitDirectoryHash :: FilePath -> IO [(FP.FilePath, String)]
+conduitDirectoryHash p =
+    getSymbolicLinkStatus (encodeString p) >>= \fs ->
+    if isRegularFile fs
+    then conduitFileHash p
+    -- TODO: this will get feeded symlinks, and other weird files, may want to exclude these
+    else traverse False p $$ CL.concatMapM conduitFileHash =$ CL.consume
+
+-- Doing the IO with a custom (1024*1024) bigBlock conduit sourceFile
+conduitFileHash :: FilePath -> IO [(FP.FilePath, String)]
+conduitFileHash p = do
+    digest <- runResourceT $ bigSourceFile (encodeString p) $$ sinkHash
+    let hash = encode (digest :: E.ED2K)
+    return [fileLine (encodeString p) hash]
+
+-- Custom bigBlock Conduit sourceFile with 1MiB blocks
+bigSourceFile :: MonadResource m => FP.FilePath -> GSource m B.ByteString
 bigSourceFile file = bracketP (openBinaryFile file ReadMode) hClose sourceHandle
 
 sourceHandle :: MonadIO m => Handle -> GSource m B.ByteString
@@ -93,7 +114,7 @@ sourceHandle h = loop
             else yield bs >> loop
 
 
-fileLine :: FilePath -> B.ByteString -> (FilePath, String)
+fileLine :: FP.FilePath -> B.ByteString -> (FP.FilePath, String)
 fileLine path hash = (path, (show $ toHex hash))
 
 -- TODO: fix this up, this is inefficient, write it in unfoldR
