@@ -1,6 +1,6 @@
 module HClient.Hasher
     ( fileDirectoryHash
-    , conduitFileDirectoryHash
+    , traditionalFileHash
     ) where
 
 import Control.Applicative ((<$>))
@@ -34,68 +34,23 @@ import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory)
 import qualified System.IO as FP
 
 
-fileDirectoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
-fileDirectoryHash paths = concat <$> forM paths (\path -> do
-        fs <- getFileStatus path
-
-        if isRegularFile fs
-        then (fileHash [path] >>= return)
-        else if isDirectory fs
-            then (directoryHash [path] >>= return)
-            else return [(path, "")])
-
--- This is terrible, as is fileDirectoryHash but it'll work for now
-directoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
-directoryHash dirs = concat <$> forM dirs getRecursiveContents
-    where
-        getRecursiveContents :: FP.FilePath -> IO [(FP.FilePath, String)]
-        getRecursiveContents topdir = do
-            a <- properNames topdir
-            concat <$> forM a (\name -> do
-                let path = topdir `combine` name
-                fs <- getFileStatus path
-                if isDirectory fs
-                then getRecursiveContents path
-                else (fileHash [path] >>= return))
-            where
-                properNames topdir = do
-                    names <- getDirectoryContents topdir
-                    return $ filter (`notElem` [".", ".."]) names
-
-
--- Doing the IO myself, in managed strict hGet (1MiB chunks)
-fileHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
-fileHash files = forM files (\path -> do
-        hash <- bracket (openFile path ReadMode) hClose (\fh -> foreach fh E.initEd2k)
-        return $ fileLine path hash)
-    where
-        foreach :: Handle -> E.Ctx -> IO B.ByteString
-        foreach fh ctx = do
-            let size = 1024 * 1024 -- Found via trial runs (1MiB)
-            a <- B.hGet fh size
-            case B.null a of
-                True  -> return $ E.finalizeEd2k ctx
-                -- Then also a deepseq here to force the foreach to release
-                -- the chunks of bytestring that it wants to rentain
-                False -> foreach fh $!! (E.updateEd2k ctx a)
-
-
 -- Takes a list of FP.FilePath and convert it to real FilePath then map over it and
 -- send it to directorySync where the real magic happens
-conduitFileDirectoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
-conduitFileDirectoryHash p = concat <$> (mapM conduitDirectoryHash $ map decodeString p)
+fileDirectoryHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
+fileDirectoryHash p = concat <$> (mapM directoryHash $ map decodeString p)
 
-conduitDirectoryHash :: FilePath -> IO [(FP.FilePath, String)]
-conduitDirectoryHash p =
+directoryHash :: FilePath -> IO [(FP.FilePath, String)]
+directoryHash p =
     getSymbolicLinkStatus (encodeString p) >>= \fs ->
     if isRegularFile fs
-    then conduitFileHash p
-    -- TODO: this will get feeded symlinks, and other weird files, may want to exclude these
-    else traverse False p $$ CL.concatMapM conduitFileHash =$ CL.consume
+    then fileHash p
+    else if isDirectory fs
+         then traverse False p $$ CL.concatMapM fileHash =$ CL.consume
+         else return [("", "")]
 
 -- Doing the IO with a custom (1024*1024) bigBlock conduit sourceFile
-conduitFileHash :: FilePath -> IO [(FP.FilePath, String)]
-conduitFileHash p = do
+fileHash :: FilePath -> IO [(FP.FilePath, String)]
+fileHash p = do
     digest <- runResourceT $ bigSourceFile (encodeString p) $$ sinkHash
     let hash = encode (digest :: E.ED2K)
     return [fileLine (encodeString p) hash]
@@ -128,3 +83,19 @@ toHex = B.concatMap word8ToHex
         pad :: String -> String
         pad [x] = ['0', x]
         pad s   = s
+
+-- Doing the IO myself, in managed strict hGet (1MiB chunks)
+traditionalFileHash :: [FP.FilePath] -> IO [(FP.FilePath, String)]
+traditionalFileHash files = forM files (\path -> do
+        hash <- bracket (openFile path ReadMode) hClose (\fh -> foreach fh E.initEd2k)
+        return $ fileLine path hash)
+    where
+        foreach :: Handle -> E.Ctx -> IO B.ByteString
+        foreach fh ctx = do
+            let size = 1024 * 1024 -- Found via trial runs (1MiB)
+            a <- B.hGet fh size
+            case B.null a of
+                True  -> return $ E.finalizeEd2k ctx
+                -- Then also a deepseq here to force the foreach to release
+                -- the chunks of bytestring that it wants to rentain
+                False -> foreach fh $!! (E.updateEd2k ctx a)

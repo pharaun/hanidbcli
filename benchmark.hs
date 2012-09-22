@@ -10,7 +10,7 @@ import qualified Crypto.Hash.Ed2k as E
 import Criterion.Main
 
 -- Hasher
-import HClient.Hasher (fileDirectoryHash, conduitFileHash)
+import HClient.Hasher (fileDirectoryHash, traditionalFileHash)
 
 
 testFile :: FilePath
@@ -34,11 +34,11 @@ main = do
 
 -- Doing the IO myself, in managed strict hGet (9.27MiB) chunks
 test1 :: FilePath -> IO [(FilePath, String)]
-test1 file = fileDirectoryHash [file]
+test1 file = traditionalFileHash [file]
 
 -- Conduit - Ed2k
 test2 :: FilePath -> IO [(FilePath, String)]
-test2 file = conduitFileHash [file]
+test2 file = fileDirectoryHash [file]
 
 -- Here for next experimental benchmark stuff
 
