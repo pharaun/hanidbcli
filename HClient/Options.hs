@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable, RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable, ScopedTypeVariables #-}
 module HClient.Options
     ( Options(..)
 

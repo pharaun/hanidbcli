@@ -6,7 +6,7 @@ module HClient.Sync
 
 import Control.Monad (foldM)
 import Data.Data (Data, Typeable)
-import Prelude hiding (FilePath)
+import Prelude hiding (FilePath, catch)
 import qualified Data.IxSet as IS
 import qualified System.IO as FP
 
@@ -46,14 +46,14 @@ instance IS.Indexable UniqueFile where
 -- IxSet Tuple of (known files, new files)
 type SyncSet = (IS.IxSet UniqueFile, IS.IxSet UniqueFile)
 
-initSyncSet :: (IS.IxSet UniqueFile) -> SyncSet
+initSyncSet :: IS.IxSet UniqueFile -> SyncSet
 initSyncSet k = (k, IS.empty)
 
 -- Updates the SyncSet
 -- 1. If new file, update the (new files) set
 -- 2. Otherwise, update the (known files) set
 updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
-updateSyncSet s u = if (isNewFile s u) then updateNewFile s u else updateKnownFile s u
+updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
 
 -- 1. Check to see if (known files) set is empty, if so, return True
 -- 2. See if the DeviceID exists, if not, return True
@@ -61,19 +61,15 @@ updateSyncSet s u = if (isNewFile s u) then updateNewFile s u else updateKnownFi
 -- 4. Otherwise, return False
 isNewFile :: SyncSet -> UniqueFile -> Bool
 isNewFile (k, n) u@(UniqueFile _ fid did _ _) =
-    if IS.null k
-    then True
-    else if IS.null (IS.getEQ did k)
-         then True
-         else if IS.null (IS.getEQ fid (IS.getEQ did k))
-              then True
-              else False
+    IS.null k ||
+        (IS.null (IS.getEQ did k) ||
+            IS.null (IS.getEQ fid (IS.getEQ did k)))
 
 updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
-updateKnownFile (k, n) u = ((IS.delete u k), n)
+updateKnownFile (k, n) u = (IS.delete u k, n)
 
 updateNewFile :: SyncSet -> UniqueFile -> SyncSet
-updateNewFile (k, n) u = (k, (IS.insert u n))
+updateNewFile (k, n) u = (k, IS.insert u n)
 
 
 -- Takes a list of FP.FilePath and convert it to real FilePath then fold over it and
@@ -81,13 +77,14 @@ updateNewFile (k, n) u = (k, (IS.insert u n))
 fileDirectorySync :: [FP.FilePath] -> IO SyncSet
 fileDirectorySync p = foldM directorySync (initSyncSet IS.empty) $ map decodeString p
 
+-- TODO: deal with file access, permission, symlink, hardlinks, etc
 directorySync :: SyncSet -> FilePath -> IO SyncSet
 directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
     if isRegularFile fs
     then fileSync s p
     else if isDirectory fs
-         then traverse False p $$ CL.foldM fileSync s
-         else return $ s
+         then traverse False (\_ -> True) p $$ CL.foldM fileSync s
+         else return s
 
 fileSync :: SyncSet -> FilePath -> IO SyncSet
 fileSync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
