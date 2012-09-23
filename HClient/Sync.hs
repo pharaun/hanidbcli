@@ -2,6 +2,14 @@
 module HClient.Sync
     ( fileDirectorySync
     , UniqueFile(..)
+
+    -- SyncSet support
+    , SyncSet
+    , initSyncSet
+    , updateSyncSet
+    , isNewFile
+    , updateKnownFile
+    , updateNewFile
     ) where
 
 import Control.Monad (foldM)
