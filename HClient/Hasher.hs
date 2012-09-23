@@ -44,7 +44,7 @@ directoryHash p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
     then fileHash p
     else if isDirectory fs
          then traverse False (\_ -> True) p $$ CL.concatMapM fileHash =$ CL.consume
-         else return [("", "")]
+         else return []
 
 -- TODO: deal with file access, permission, symlink, hardlinks, etc
 -- Doing the IO with a custom (1024*1024) bigBlock conduit sourceFile
@@ -57,8 +57,8 @@ fileHash p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
             digest <- runResourceT $ bigSourceFile (encodeString p) $$ sinkHash
             let hash = encode (digest :: E.ED2K)
             return [fileLine (encodeString p) hash])
-        else return [("", "")]
-    else return [("", "")]
+        else return []
+    else return []
 
 -- Custom bigBlock Conduit sourceFile with 1MiB blocks
 bigSourceFile :: MonadResource m => FP.FilePath -> GSource m B.ByteString
@@ -70,7 +70,6 @@ sourceHandle h = loop
         loop = do
             bs <- liftIO (B.hGetSome h (1024*1024))
             unless (B.null bs) $ yield bs >> loop
-
 
 fileLine :: FP.FilePath -> B.ByteString -> (FP.FilePath, String)
 fileLine path hash = (path, show $ toHex hash)
