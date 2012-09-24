@@ -16,6 +16,7 @@ import Control.Monad (foldM)
 import Data.Data (Data, Typeable)
 import Prelude hiding (FilePath, catch)
 import qualified Data.IxSet as IS
+import qualified Data.Set as Set
 import qualified System.IO as FP
 
 -- Conduit
@@ -28,8 +29,9 @@ import qualified Data.Conduit.List as CL
 import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory, deviceID, fileID, fileSize, FileStatus)
 import System.Posix.Types
 
+-- TODO: we don't want just a list, a set would be better here
 -- "Posix Unique" File identifier along with file size and maybe a hash of the file
-data UniqueFile = UniqueFile FilePath FileID DeviceID FileOffset (Maybe String)
+data UniqueFile = UniqueFile (Set.Set FilePath) FileID DeviceID FileOffset (Maybe String)
     deriving (Eq, Ord, Show, Data, Typeable)
 
 -- TODO: extract the Word* value out of these and store it into my own unique newtype
@@ -96,4 +98,4 @@ directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
 
 fileSync :: SyncSet -> FilePath -> IO SyncSet
 fileSync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
-    return $ updateSyncSet s $ UniqueFile p (fileID fs) (deviceID fs) (fileSize fs) Nothing
+    return $ updateSyncSet s $ UniqueFile (Set.fromList [p]) (fileID fs) (deviceID fs) (fileSize fs) Nothing

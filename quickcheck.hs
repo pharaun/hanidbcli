@@ -10,6 +10,7 @@ import Filesystem.Path.CurrentOS (FilePath, encodeString, decodeString, (</>))
 import Prelude hiding (FilePath)
 import System.Posix.Types
 import qualified Data.IxSet as IS
+import qualified Data.Set as Set
 
 -- SyncSet = Set UniqueFile, Set UniqueFile
 --
@@ -35,7 +36,8 @@ instance Arbitrary UniqueFile where
         fileHash <- hexHash
 
         return $ UniqueFile
-            (decodeString filePath)
+            -- TODO: find a way to generate file path, maybe lists for hardlinks
+            (Set.fromList [decodeString filePath])
             (CIno fileID)
             (CDev deviceID)
             (COff fileSize)
@@ -89,6 +91,9 @@ prop_newFile_Empty_SyncSet uf = (updateNewFile (initSyncSet IS.empty) uf) == (IS
 prop_newFile_SyncSet uf xs = (updateNewFile (initSyncSet xs) uf) == (xs, IS.fromList [uf])
 
 --  Adding the same file must result in the same SyncSet
+prop_newFile_sameFile_SyncSet uf =
+    (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf) == (IS.empty, IS.fromList [uf])
+
 --  Adding a "Hardlink" (same file different filename) must result with both file in SyncSet (?)
 
 
@@ -134,6 +139,7 @@ main = do
 
     quickCheck prop_newFile_Empty_SyncSet
     quickCheck prop_newFile_SyncSet
+    quickCheck prop_newFile_sameFile_SyncSet
 
     quickCheck prop_isNewFile_Empty_SyncSet
     quickCheck prop_isNewFile_unknownDeviceUnknownFile_SyncSet
