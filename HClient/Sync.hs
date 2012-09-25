@@ -93,6 +93,7 @@ directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
     if isRegularFile fs
     then fileSync s p
     else if isDirectory fs
+         -- TODO: deal with too many level of symbolic links
          then traverse False (\_ -> True) p $$ CL.foldM fileSync s
          else return s
 
