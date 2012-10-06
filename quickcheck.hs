@@ -13,9 +13,7 @@ import qualified Data.IxSet as IS
 import qualified Data.Set as Set
 
 -- SyncSet = Set UniqueFile, Set UniqueFile
---
 -- UniqueFile = FilePath, File Inode, Device Id, File Size, Hash?
---
 -- IxSet indexes on File Inode, Device ID
 --
 -- Disclaimer:
@@ -26,7 +24,12 @@ import qualified Data.Set as Set
 --
 -- More properties to come (RE hashes)
 --
-
+-- Properties: (hardlink, symlink)
+--  Deal with hardlink and symlink in a safe manner
+--  hardlink -> multiple path assocated with a unique file
+--  symlink -> (? unique file pointer? or some sort of marker to identify as a symlink)
+--      could be done via lstat + stat and using one or the other as the dst vs source
+--
 instance Arbitrary UniqueFile where
     arbitrary = do
         filePath <- elements ["/home/foo", "/tmp/bar.gz", "/long/silly/[file]name(terrible).exe.jpg"]
@@ -59,7 +62,7 @@ hexChar = oneof [ elements ['A'..'F'], elements ['0'..'9'] ]
 hexHash :: Gen String
 hexHash = vectorOf 32 hexChar
 
-
+-- Take the 2nd UniqueFile and merge in the 1st UniqueFile device and file id
 knownDeviceFile :: UniqueFile -> UniqueFile -> UniqueFile
 knownDeviceFile uf1 uf2 = fileOnly uf1 uf2
     where
@@ -105,7 +108,7 @@ prop_newFile_SyncSet uf xs = (updateNewFile (initSyncSet xs) uf) == (xs, IS.from
 prop_newFile_sameFile_SyncSet uf =
     (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf) == (IS.empty, IS.fromList [uf])
 
---  Adding a "Hardlink" (same file different filename) must result with both file in SyncSet
+--  Adding a "Hardlink" (same file different filename) must result with both file merged in the SyncSet
 prop_newFile_hardLinkFile_SyncSet uf path =
     let nhlf = mergedUniqueFile uf path
         uf2  = newUniqueFile uf path
@@ -122,49 +125,87 @@ prop_isNewFile_unknownDeviceUnknownFile_SyncSet uf1 uf2 =
         (isNewFile (initSyncSet $ IS.fromList [uf1]) uf2 == True)
 
 --  if device id exist and file id does not exist it must return true
-prop_isNewFile_knownDeviceUnknownFile_SyncSet uf1 uf2 = -- TODO: probably better as a newtype on deviceID
-    not (sameFile uf1 uf2) ==>
-        let uf3 = mergeDeviceID uf1 uf2
+prop_isNewFile_knownDeviceUnknownFile_SyncSet uf1 mock =
+    not (sameFile uf1 mock) ==>
+        let uf3 = mergeDeviceID uf1 mock
         in (isNewFile (initSyncSet $ IS.fromList [uf1]) uf3 == True)
 
---  if device id exists and file id exists it must return false (wrong?)
-prop_isNewFile_knownDeviceKnownFile_SyncSet uf1 uf2 = -- TODO: probably better as a newtype on fileID
-    let kdf = knownDeviceFile uf1 uf2
+--  if device id exists and file id exists it must return false (TODO: hardlink dealing with here)
+prop_isNewFile_knownDeviceKnownFile_SyncSet uf1 mock =
+    let kdf = knownDeviceFile uf1 mock
     in (isNewFile (initSyncSet $ IS.fromList [kdf]) uf1 == False)
 
 
 -- Properties: (update known file)
---  The known file must always have its entry removed
 --  there must either be one less entry or a empty set
+prop_knownFile_alwaysRemove_SyncSet kf1 =
+    let ss = initSyncSet $ IS.fromList [kf1]
+    in updateKnownFile ss kf1 == (initSyncSet IS.empty)
+
+--  The known file must always have its entry removed
+prop_knownFile_alwaysRemoveCorrectFile_SyncSet kf1 kf2 =
+    let ss = initSyncSet $ IS.fromList [kf1, kf2]
+    in updateKnownFile ss kf2 == (initSyncSet $ IS.fromList [kf1])
+
 --  Removing the same file twice must be the same as removing it once
+prop_knownFile_removeTwice_SyncSet kf1 =
+    let ss = initSyncSet $ IS.fromList [kf1]
+    in updateKnownFile (updateKnownFile ss kf1) kf1 == (initSyncSet IS.empty)
+
+prop_knownFile_removeOneFileTwice_SyncSet kf1 kf2 =
+    let ss = initSyncSet $ IS.fromList [kf1, kf2]
+    in updateKnownFile (updateKnownFile ss kf2) kf2 == (initSyncSet $ IS.fromList [kf1])
+
 --  removing a hardlink must remove the correct file
+prop_knownFile_removeOneHardLinkFile_SyncSet kf1 mock_path =
+    let kdf = mergedUniqueFile kf1 mock_path
+        nkdf = newUniqueFile kf1 mock_path
+        ss = initSyncSet $ IS.fromList [kdf]
+    in updateKnownFile ss kf1 == (initSyncSet $ IS.fromList [nkdf])
+
 --  removing a hardlink twice must only remove the correct file and not the other file
+prop_knownFile_removeOneHardLinkFileTwice_SyncSet kf1 mock_path =
+    let kdf = mergedUniqueFile kf1 mock_path
+        nkdf = newUniqueFile kf1 mock_path
+        ss = initSyncSet $ IS.fromList [kdf]
+    in updateKnownFile (updateKnownFile ss kf1) kf1 == (initSyncSet $ IS.fromList [nkdf])
 
 
 -- Properties: (updating syncset)
 --  a file added MUST always be either removed from known set or added to new set
-
--- Properties: (hardlink, symlink)
---  Deal with hardlink and symlink in a safe manner
---  hardlink -> multiple path assocated with a unique file
---  symlink -> (? unique file pointer? or some sort of marker to identify as a symlink)
---      could be done via lstat + stat and using one or the other as the dst vs source
+-- updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
+-- updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
 
 
 -- Test driver and stuff
 -- Borrowed from the XMonad project
 main :: IO ()
-main = do
-    quickCheck prop_empty1_SyncSet
-    quickCheck prop_empty2_SyncSet
-    quickCheck prop_arbitraryKnown_SyncSet
+main = sequence_ testlist
+    where
+        arg      = stdArgs { maxSuccess=200 }
+        testlist =
+            [ myTest prop_empty1_SyncSet
+            , myTest prop_empty2_SyncSet
+            , myTest prop_arbitraryKnown_SyncSet
 
-    quickCheck prop_newFile_Empty_SyncSet
-    quickCheck prop_newFile_SyncSet
-    quickCheck prop_newFile_sameFile_SyncSet
-    quickCheck prop_newFile_hardLinkFile_SyncSet
+            , myTest prop_newFile_Empty_SyncSet
+            , myTest prop_newFile_SyncSet
+            , myTest prop_newFile_sameFile_SyncSet
+            , myTest prop_newFile_hardLinkFile_SyncSet
 
-    quickCheck prop_isNewFile_Empty_SyncSet
-    quickCheck prop_isNewFile_unknownDeviceUnknownFile_SyncSet
-    quickCheck prop_isNewFile_knownDeviceUnknownFile_SyncSet
-    quickCheck prop_isNewFile_knownDeviceKnownFile_SyncSet
+            , myTest prop_isNewFile_Empty_SyncSet
+            , myTest prop_isNewFile_unknownDeviceUnknownFile_SyncSet
+            , myTest prop_isNewFile_knownDeviceUnknownFile_SyncSet
+            , myTest prop_isNewFile_knownDeviceKnownFile_SyncSet
+
+            , myTest prop_knownFile_alwaysRemove_SyncSet
+            , myTest prop_knownFile_alwaysRemoveCorrectFile_SyncSet
+            , myTest prop_knownFile_removeTwice_SyncSet
+            , myTest prop_knownFile_removeOneFileTwice_SyncSet
+
+            , myTest prop_knownFile_removeOneHardLinkFile_SyncSet
+            , myTest prop_knownFile_removeOneHardLinkFileTwice_SyncSet
+            ]
+
+        myTest :: Testable a => a -> IO ()
+        myTest a = quickCheckWith arg a

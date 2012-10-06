@@ -29,12 +29,19 @@ import qualified Data.Conduit.List as CL
 import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory, deviceID, fileID, fileSize, FileStatus)
 import System.Posix.Types
 
--- TODO: we don't want just a list, a set would be better here
 -- "Posix Unique" File identifier along with file size and maybe a hash of the file
+--
+-- This does not deal with symbolic link, for now the full code base here and the hasher
+-- does not directly deal with symbolic links at all, IE if the file under inspection is
+-- a symbolic link its ignored.
+--
+-- Now we do support hardlinks because it would be somewhat deadly to not directly deal with
+-- hardlinks here considering we are dependent on Inodes and device ids to identify new/old files.
 data UniqueFile = UniqueFile (Set.Set FilePath) FileID DeviceID FileOffset (Maybe String)
     deriving (Eq, Ord, Show, Data, Typeable)
 
--- TODO: extract the Word* value out of these and store it into my own unique newtype
+-- TODO: The more proper thing to do here is to have my own type/opaque type for dealing with these
+-- values
 deriving instance Data COff -- FileOffset
 deriving instance Data CDev -- DeviceID
 deriving instance Data CIno -- FileID
@@ -65,6 +72,7 @@ initSyncSet k = (k, IS.empty)
 updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
 updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
 
+-- TODO: this needs to be more aware of the difference between new file vs hardlinks
 -- 1. Check to see if (known files) set is empty, if so, return True
 -- 2. See if the DeviceID exists, if not, return True
 -- 3. See if the FileID exists, if not, return True
@@ -75,9 +83,11 @@ isNewFile (k, n) u@(UniqueFile _ fid did _ _) =
         (IS.null (IS.getEQ did k) ||
             IS.null (IS.getEQ fid (IS.getEQ did k)))
 
+-- TODO: deal with hardlinks
 updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
 updateKnownFile (k, n) u = (IS.delete u k, n)
 
+-- TODO: deal with hardlinks
 updateNewFile :: SyncSet -> UniqueFile -> SyncSet
 updateNewFile (k, n) u = (k, IS.insert u n)
 
@@ -93,7 +103,7 @@ directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
     if isRegularFile fs
     then fileSync s p
     else if isDirectory fs
-         -- TODO: deal with too many level of symbolic links
+         -- TODO: deal with too many level of symbolic links (Ignore symbolic links for now)
          then traverse False (\_ -> True) p $$ CL.foldM fileSync s
          else return s
 
