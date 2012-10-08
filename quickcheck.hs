@@ -92,27 +92,11 @@ newUniqueFile (UniqueFile _ b c d e) x = UniqueFile x b c d e
 
 -- Properties: (init syncset)
 --  an Init SyncSet must always have the "known files" be populated
-prop_empty1_SyncSet = (initSyncSet $ IS.fromList []) == (IS.empty, IS.empty)
-prop_empty2_SyncSet = (initSyncSet $ IS.empty) == (IS.empty, IS.empty)
+prop_empty1_SyncSet = (initSyncSet $ IS.fromList []) == (IS.empty, IS.empty, IS.empty)
+prop_empty2_SyncSet = (initSyncSet $ IS.empty) == (IS.empty, IS.empty, IS.empty)
 
 --  it can be anything from nothing to thousands
-prop_arbitraryKnown_SyncSet xs = (initSyncSet xs) == (xs, IS.empty)
-
-
--- Properties: (updating new file)
---  the new file must always have its entry added
-prop_newFile_Empty_SyncSet uf = (updateNewFile (initSyncSet IS.empty) uf) == (IS.empty, IS.fromList [uf])
-prop_newFile_SyncSet uf xs = (updateNewFile (initSyncSet xs) uf) == (xs, IS.fromList [uf])
-
---  Adding the same file must result in the same SyncSet
-prop_newFile_sameFile_SyncSet uf =
-    (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf) == (IS.empty, IS.fromList [uf])
-
---  Adding a "Hardlink" (same file different filename) must result with both file merged in the SyncSet
-prop_newFile_hardLinkFile_SyncSet uf path =
-    let nhlf = mergedUniqueFile uf path
-        uf2  = newUniqueFile uf path
-    in (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf2 == (IS.empty, IS.fromList [nhlf]))
+prop_arbitraryKnown_SyncSet xs = (initSyncSet xs) == (xs, IS.empty, IS.empty)
 
 
 -- Properties: (isNewFile)
@@ -130,10 +114,35 @@ prop_isNewFile_knownDeviceUnknownFile_SyncSet uf1 mock =
         let uf3 = mergeDeviceID uf1 mock
         in (isNewFile (initSyncSet $ IS.fromList [uf1]) uf3 == True)
 
---  if device id exists and file id exists it must return false (TODO: hardlink dealing with here)
+--  if device id exists and file id exists it must return false
+--  TODO: hardlink dealing with here)
+--  How do we want to deal with hardlinks here, IE do we just want to add the hardlink
+--  to the known file or treat it like a new file?
 prop_isNewFile_knownDeviceKnownFile_SyncSet uf1 mock =
     let kdf = knownDeviceFile uf1 mock
     in (isNewFile (initSyncSet $ IS.fromList [kdf]) uf1 == False)
+
+
+-- Properties: (updating new file)
+--  the new file must always have its entry added
+prop_newFile_Empty_SyncSet uf = (updateNewFile (initSyncSet IS.empty) uf) == (IS.empty, IS.fromList [uf], IS.empty)
+prop_newFile_SyncSet uf xs = (updateNewFile (initSyncSet xs) uf) == (xs, IS.fromList [uf], IS.empty)
+
+--  Adding the same file must result in the same SyncSet
+prop_newFile_sameFile_SyncSet uf =
+    (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf) == (IS.empty, IS.fromList [uf], IS.empty)
+
+--  Adding a "Hardlink" (same file different filename) must result with both file merged in the SyncSet
+prop_newFile_hardLinkFile_SyncSet uf path =
+    let nhlf = mergedUniqueFile uf path
+        uf2  = newUniqueFile uf path
+    in (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf2 == (IS.empty, IS.fromList [nhlf], IS.empty))
+
+--  Adding a duplicate filename (hardlink) to a pre-existing new unique file in syncset
+prop_newFile_duplicateHardLinkFile_SyncSet uf path =
+    let nhlf = mergedUniqueFile uf path
+        uf2  = newUniqueFile uf path
+    in (updateNewFile (updateNewFile (initSyncSet IS.empty) nhlf) uf2 == (IS.empty, IS.fromList [nhlf], IS.empty))
 
 
 -- Properties: (update known file)
@@ -184,28 +193,30 @@ main = sequence_ testlist
     where
         arg      = stdArgs { maxSuccess=200 }
         testlist =
-            [ myTest prop_empty1_SyncSet
-            , myTest prop_empty2_SyncSet
-            , myTest prop_arbitraryKnown_SyncSet
+            [ myTest "empty SyncSet 1" prop_empty1_SyncSet
+            , myTest "empty SyncSet 2" prop_empty2_SyncSet
+            , myTest "arbitrary SyncSet" prop_arbitraryKnown_SyncSet
 
-            , myTest prop_newFile_Empty_SyncSet
-            , myTest prop_newFile_SyncSet
-            , myTest prop_newFile_sameFile_SyncSet
-            , myTest prop_newFile_hardLinkFile_SyncSet
+            , myTest "new file" prop_isNewFile_Empty_SyncSet
+            , myTest "new file - unknown device & file" prop_isNewFile_unknownDeviceUnknownFile_SyncSet
+            , myTest "new file - known device, unknown file" prop_isNewFile_knownDeviceUnknownFile_SyncSet
+            , myTest "new file - known device & file" prop_isNewFile_knownDeviceKnownFile_SyncSet
+            -- TODO: Add new file hardlink handling here
 
-            , myTest prop_isNewFile_Empty_SyncSet
-            , myTest prop_isNewFile_unknownDeviceUnknownFile_SyncSet
-            , myTest prop_isNewFile_knownDeviceUnknownFile_SyncSet
-            , myTest prop_isNewFile_knownDeviceKnownFile_SyncSet
+            , myTest "add file" prop_newFile_Empty_SyncSet
+            , myTest "add file - non-empty SyncSet" prop_newFile_SyncSet
+            , myTest "add same file" prop_newFile_sameFile_SyncSet
+            , myTest "add hardlinked file" prop_newFile_hardLinkFile_SyncSet
+            , myTest "add duplicate hardlinked file" prop_newFile_duplicateHardLinkFile_SyncSet
 
-            , myTest prop_knownFile_alwaysRemove_SyncSet
-            , myTest prop_knownFile_alwaysRemoveCorrectFile_SyncSet
-            , myTest prop_knownFile_removeTwice_SyncSet
-            , myTest prop_knownFile_removeOneFileTwice_SyncSet
+            , myTest "remove file" prop_knownFile_alwaysRemove_SyncSet
+            , myTest "remove correct file" prop_knownFile_alwaysRemoveCorrectFile_SyncSet
+            , myTest "remove twice" prop_knownFile_removeTwice_SyncSet
+            , myTest "remove same file twice" prop_knownFile_removeOneFileTwice_SyncSet
 
-            , myTest prop_knownFile_removeOneHardLinkFile_SyncSet
-            , myTest prop_knownFile_removeOneHardLinkFileTwice_SyncSet
+            , myTest "remove hardlink file" prop_knownFile_removeOneHardLinkFile_SyncSet
+            , myTest "remove hardlink file twice" prop_knownFile_removeOneHardLinkFileTwice_SyncSet
             ]
 
-        myTest :: Testable a => a -> IO ()
-        myTest a = quickCheckWith arg a
+        myTest :: Testable a => String -> a -> IO ()
+        myTest b a = putStrLn b >> quickCheckWith arg a >> putStrLn ""

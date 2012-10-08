@@ -7,6 +7,7 @@ module HClient.Sync
     , SyncSet
     , initSyncSet
     , updateSyncSet
+    -- TODO: Add merging syncset support? Merging UniqueFile?
     , isNewFile
     , updateKnownFile
     , updateNewFile
@@ -60,11 +61,11 @@ instance IS.Indexable UniqueFile where
         , IS.ixGen (IS.Proxy :: IS.Proxy DeviceID)
         ]
 
--- IxSet Tuple of (known files, new files)
-type SyncSet = (IS.IxSet UniqueFile, IS.IxSet UniqueFile)
+-- IxSet Tuple of (known files, new files, new hardlink to known file)
+type SyncSet = (IS.IxSet UniqueFile, IS.IxSet UniqueFile, IS.IxSet UniqueFile)
 
 initSyncSet :: IS.IxSet UniqueFile -> SyncSet
-initSyncSet k = (k, IS.empty)
+initSyncSet k = (k, IS.empty, IS.empty)
 
 -- Updates the SyncSet
 -- 1. If new file, update the (new files) set
@@ -72,25 +73,35 @@ initSyncSet k = (k, IS.empty)
 updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
 updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
 
--- TODO: this needs to be more aware of the difference between new file vs hardlinks
 -- 1. Check to see if (known files) set is empty, if so, return True
 -- 2. See if the DeviceID exists, if not, return True
 -- 3. See if the FileID exists, if not, return True
 -- 4. Otherwise, return False
+-- Does not take in accord hardlinks but for our usecase its only known file that cares
 isNewFile :: SyncSet -> UniqueFile -> Bool
-isNewFile (k, n) u@(UniqueFile _ fid did _ _) =
+isNewFile (k, _, _) u@(UniqueFile _ fid did _ _) =
     IS.null k ||
         (IS.null (IS.getEQ did k) ||
             IS.null (IS.getEQ fid (IS.getEQ did k)))
 
 -- TODO: deal with hardlinks
 updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
-updateKnownFile (k, n) u = (IS.delete u k, n)
+updateKnownFile (k, n, h) u = (IS.delete u k, n, h)
 
--- TODO: deal with hardlinks
 updateNewFile :: SyncSet -> UniqueFile -> SyncSet
-updateNewFile (k, n) u = (k, IS.insert u n)
+updateNewFile (k, n, h) u = (k, (mergeHardlinkFile n u), h)
 
+-- Find a file in the IxSet and merge in the new hardlinked file
+mergeHardlinkFile :: IS.IxSet UniqueFile -> UniqueFile -> IS.IxSet UniqueFile
+mergeHardlinkFile s u@(UniqueFile _ fid did _ _) =
+    let setFile = IS.getOne (IS.getEQ fid (IS.getEQ did s))
+    in case setFile of
+        Nothing -> IS.insert u s
+--        Just x  -> IS.updateIx (fid, did) (mergeUniqueFile x u) s
+        Just x  -> IS.insert (mergeUniqueFile x u) (IS.delete x s)
+    where
+        mergeUniqueFile :: UniqueFile -> UniqueFile -> UniqueFile
+        mergeUniqueFile (UniqueFile a b c d e) (UniqueFile x _ _ _ _) = UniqueFile (Set.union a x) b c d e
 
 -- Takes a list of FP.FilePath and convert it to real FilePath then fold over it and
 -- send it to directorySync where the real magic happens
