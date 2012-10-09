@@ -13,6 +13,7 @@ module HClient.Sync
     , updateNewFile
     ) where
 
+import Data.Maybe (isNothing, fromJust)
 import Control.Monad (foldM)
 import Data.Data (Data, Typeable)
 import Prelude hiding (FilePath, catch)
@@ -84,9 +85,90 @@ isNewFile (k, _, _) u@(UniqueFile _ fid did _ _) =
         (IS.null (IS.getEQ did k) ||
             IS.null (IS.getEQ fid (IS.getEQ did k)))
 
--- TODO: deal with hardlinks
+
+-- Looks like its time to reframe the design of the SyncSet
+-- We tried to be clever and grow and remove items from the SyncSet, this does not work, so
+-- Perhaps its time for a respin on the SyncSet....
+--
+-- IxSet on device and file id seems to work good for the general lookup case.
+--  HardLink on UniqueFiles seems to be painful because of nested Set, better functions
+--      for dealing with this would go a long way toward reducing the pain.
+--
+--  Perhaps take advantage of IxSet and add a "status" type like (Seen, New, Unseen) and
+--      default to Unseen, which when you query on Unseen it will yield a list of all Unseen
+--      files and hardlink (assuming one uniquefile per link/file)
+--      It would also yield up a list of all new file, then anything still marked unseen as deleted
+--
+--  However what's the best manner to group up each hardlinks? (We have GroupBy which is on a key...)
+--      Perhaps a unified index of device+file could work but would need to be *careful*
+--
+--  Perhaps it may be worth it to break up the data into a single IxSet for device, then for each
+--      device it gets a subIxSet for the fileId that way all of the groupBy/etc function would work
+--      However it would still not allow the modify op because of multiple file to a fileid...
+--
+--  Even (Device, File) set as a index would not be global unique in case of hardlink, unless we
+--      embed the hardlink info into the UniqueFile plus their status info...
+--
+--  I am starting to think that there may be a benefit of treating even hardlinks as its own file cos
+--      of the file pointer, as long as we do not *alter* the file at all (just rename the file pointer)
+--      then for all intents and purpose a hardlink is "its own" file, it just has same inode/device for
+--      the hashing purpose and for notification purpose of "duplicate files"
+--
+--  So In ideal case you would not have hardlinks (symlinks perhaps, but that's a thronnier problem
+--      for latter anyway)
+
+-- New Structure.
+--
+-- IxSet (deviceId) of IxSet (FileID) of (UniqueFile, Status), where Status = (Unseen, Seen, New)
+--  Would probably want index on file id, then file name, for fast discovery for updating file status
+--  and detection of new/seen files
+--
+-- Query Design:
+--  - GroupBy (DeviceID, FileID) - Hardlink groups
+--  - Update File Status - Find via "filename", confirm/match DeviceID+FileID then update status?
+--  - GroupBy Status
+--
+--  IxSet (DeviceID, FileID), (FileName), (Status)
+
+
+
+--
+-- We have a UniqueFile in the IxSet that may have one or more "hardlinks"
+-- We also have a UniqueFile (new?) that may have one or more "hardlinks"
+--
+-- We need to determite if its all entirely a new hardlinked file, if so add it to
+-- new hardlink to known file.
+--
+-- Otherwise remove the relevant hardlink from the IxSet or the whole UniqueFile if it was
+-- the whole thing.
+--
+-- 1. Detect what is new, store the subset that is new into "new hardlink IxSet"
+-- 2. Remove UniqueFile out of IxSet
+--  a. Remove known file out, if any left, reinsert into IxSet "known"
+--  b. Otherwise leave it out?
 updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
-updateKnownFile (k, n, h) u = (IS.delete u k, n, h)
+updateKnownFile (k, n, h) u@(UniqueFile _ fid did _ _) =
+    let setFile = IS.getOne (IS.getEQ fid (IS.getEQ did k))
+    in case setFile of
+        Nothing -> (k, n, (mergeHardlinkFile h u))
+        Just x  -> ((removeHardlinkFile k x u), n, (addHardlinkFile k x u))
+
+-- Find the old hardlink and remove it, either remove the whole UniqueFile or part of it
+removeHardlinkFile :: IS.IxSet UniqueFile -> UniqueFile -> UniqueFile -> IS.IxSet UniqueFile
+removeHardlinkFile s u@(UniqueFile a b c d e) (UniqueFile x _ _ _ _) =
+    let keep = Set.difference a (Set.intersection a x)
+    in  if Set.null keep
+        then IS.delete u s
+        else IS.insert (UniqueFile keep b c d e) (IS.delete u s)
+
+-- Finds the new hardlink then merge it into the new hardlink set
+addHardlinkFile :: IS.IxSet UniqueFile -> UniqueFile -> UniqueFile -> IS.IxSet UniqueFile
+addHardlinkFile s (UniqueFile a b c d e) (UniqueFile x _ _ _ _) =
+    let new = Set.difference x (Set.intersection x a)
+    in  if Set.null new
+        then s
+        else mergeHardlinkFile s (UniqueFile new b c d e)
+
 
 updateNewFile :: SyncSet -> UniqueFile -> SyncSet
 updateNewFile (k, n, h) u = (k, (mergeHardlinkFile n u), h)
@@ -97,7 +179,6 @@ mergeHardlinkFile s u@(UniqueFile _ fid did _ _) =
     let setFile = IS.getOne (IS.getEQ fid (IS.getEQ did s))
     in case setFile of
         Nothing -> IS.insert u s
---        Just x  -> IS.updateIx (fid, did) (mergeUniqueFile x u) s
         Just x  -> IS.insert (mergeUniqueFile x u) (IS.delete x s)
     where
         mergeUniqueFile :: UniqueFile -> UniqueFile -> UniqueFile

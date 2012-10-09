@@ -146,6 +146,11 @@ prop_newFile_duplicateHardLinkFile_SyncSet uf path =
 
 
 -- Properties: (update known file)
+--  Removing a file from a empty syncset does not explode things
+prop_knownFile_emptyRemove kf1 =
+    let ss = initSyncSet $ IS.empty
+    in updateKnownFile ss kf1 == ss
+
 --  there must either be one less entry or a empty set
 prop_knownFile_alwaysRemove_SyncSet kf1 =
     let ss = initSyncSet $ IS.fromList [kf1]
@@ -209,6 +214,7 @@ main = sequence_ testlist
             , myTest "add hardlinked file" prop_newFile_hardLinkFile_SyncSet
             , myTest "add duplicate hardlinked file" prop_newFile_duplicateHardLinkFile_SyncSet
 
+            , myTest "remove file from empty set" prop_knownFile_emptyRemove
             , myTest "remove file" prop_knownFile_alwaysRemove_SyncSet
             , myTest "remove correct file" prop_knownFile_alwaysRemoveCorrectFile_SyncSet
             , myTest "remove twice" prop_knownFile_removeTwice_SyncSet
