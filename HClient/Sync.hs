@@ -2,9 +2,12 @@
 module HClient.Sync
     ( fileDirectorySync
     , UniqueFile(..)
+    , UniqueStatus(..)
 
     -- SyncSet support
     , SyncSet
+    , emptySyncSet
+    , fromListSyncSet
     , initSyncSet
     , updateSyncSet
     -- TODO: Add merging syncset support? Merging UniqueFile?
@@ -31,15 +34,15 @@ import qualified Data.Conduit.List as CL
 import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory, deviceID, fileID, fileSize, FileStatus)
 import System.Posix.Types
 
--- "Posix Unique" File identifier along with file size and maybe a hash of the file
+-- "Posix Unique File" identifier, which also holds the file size and a Maybe Hash of the file
+-- content for interacting with AniDB and cross device comparsion.
 --
--- This does not deal with symbolic link, for now the full code base here and the hasher
--- does not directly deal with symbolic links at all, IE if the file under inspection is
--- a symbolic link its ignored.
+-- This does not deal with symbolic links, this will be probably dealt with in a latter iteration
+-- in its own data structure/etc. But for now all code ignores symbolic links.
 --
--- Now we do support hardlinks because it would be somewhat deadly to not directly deal with
--- hardlinks here considering we are dependent on Inodes and device ids to identify new/old files.
-data UniqueFile = UniqueFile (Set.Set FilePath) FileID DeviceID FileOffset (Maybe String)
+-- We indirectly support hardlinks via the container (IxSet) but we don't support hardlinks here
+-- in the UniqueFile because of complicatedness of storing/updating the status of the hardlinks.
+data UniqueFile = UniqueFile FilePath FileID DeviceID FileOffset (Maybe String)
     deriving (Eq, Ord, Show, Data, Typeable)
 
 -- TODO: The more proper thing to do here is to have my own type/opaque type for dealing with these
@@ -48,42 +51,85 @@ deriving instance Data COff -- FileOffset
 deriving instance Data CDev -- DeviceID
 deriving instance Data CIno -- FileID
 
--- 1. Load the IxSet of known/processed files from acid-state
--- 2. Process it
---  - Disclaimer this only works for file on the same device id, if there's multiple
---  - file on other devices, the only way to deal with these is to actually hash/1:1
---  - compare the files, in this case hasing is probably adequate.
--- 4. Should have some basic cross device/fs detection, ex we have to process the hash
---    of all files anyway, so might as well do some quick duplication detection and warn
---    user of duplicates/store info on who/which files duplicates which
-instance IS.Indexable UniqueFile where
+-- File Status, this is used to mark off what file has been seen and what is new, so we can detect
+-- the removed files.
+data IxFileStatus = Unseen | Seen | New
+    deriving (Eq, Ord, Show, Data, Typeable)
+
+-- newtype of UniqueFile and IxFileStatus
+newtype UniqueStatus = UniqueStatus (UniqueFile, IxFileStatus)
+    deriving (Eq, Ord, Show, Data, Typeable)
+
+getDeviceFileId :: UniqueStatus -> (DeviceID, FileID)
+getDeviceFileId (UniqueStatus ((UniqueFile _ fid did _ _), _)) = (did, fid)
+
+getFileName :: UniqueStatus -> FilePath
+getFileName (UniqueStatus ((UniqueFile fn _ _ _ _), _)) = fn
+
+getStatus :: UniqueStatus -> IxFileStatus
+getStatus (UniqueStatus (_, s)) = s
+
+-- IxSet of the UniqueFiles, there is a couple of rules/indexing decision here to enable certain
+-- usage to make things simpler in the long run.
+--
+-- Query Design:
+--  - GroupBy (DeviceID, FileID) - Hardlink groups (Only on same filesystem)
+--  - Update File Status - Find via "filename", confirm/match DeviceID+FileID then update status?
+--  - GroupBy Status
+--
+--  IxSet (DeviceID, FileID), (FileName), (Status)
+instance IS.Indexable UniqueStatus where
     empty = IS.ixSet
-        [ IS.ixGen (IS.Proxy :: IS.Proxy FileID)
-        , IS.ixGen (IS.Proxy :: IS.Proxy DeviceID)
+        [ IS.ixFun $ \p -> [ getDeviceFileId p ]
+        , IS.ixFun $ \p -> [ getFileName p ]
+        , IS.ixFun $ \p -> [ getStatus p ]
         ]
 
--- IxSet Tuple of (known files, new files, new hardlink to known file)
-type SyncSet = (IS.IxSet UniqueFile, IS.IxSet UniqueFile, IS.IxSet UniqueFile)
+-- The IxSet... type alias
+type SyncSet = IS.IxSet UniqueStatus
 
-initSyncSet :: IS.IxSet UniqueFile -> SyncSet
-initSyncSet k = (k, IS.empty, IS.empty)
+emptySyncSet :: SyncSet
+emptySyncSet = IS.empty
+
+-- Take a list of UniqueFile and initalizes it into a SyncSet with all of the status set to Unseen
+fromListSyncSet :: [UniqueFile] -> SyncSet
+fromListSyncSet = IS.fromList . map (UniqueStatus . flip (,) Unseen)
+
+-- TODO: Remove
+initSyncSet = fromListSyncSet
 
 -- Updates the SyncSet
--- 1. If new file, update the (new files) set
--- 2. Otherwise, update the (known files) set
+-- 1. If new file/hardlink, insert into the SyncSet as New
+-- 2. Otherwise, update the relevant file in the SyncSet to Seen
 updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
 updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
 
--- 1. Check to see if (known files) set is empty, if so, return True
--- 2. See if the DeviceID exists, if not, return True
--- 3. See if the FileID exists, if not, return True
--- 4. Otherwise, return False
--- Does not take in accord hardlinks but for our usecase its only known file that cares
+-- Check to see if this UniqueFile is new to this SyncSet
+-- 1. Query to see if the (FileID, DeviceID) exists, if not, return True
+-- 2. Query the subset to see if the FileName exists, if not, return True
+-- 3. Return False
+--
+-- TODO: Normalize the FilePath perhaps to help with indexing and matching on file path/name
 isNewFile :: SyncSet -> UniqueFile -> Bool
-isNewFile (k, _, _) u@(UniqueFile _ fid did _ _) =
-    IS.null k ||
-        (IS.null (IS.getEQ did k) ||
-            IS.null (IS.getEQ fid (IS.getEQ did k)))
+isNewFile s u@(UniqueFile fn fid did _ _) = not (
+    IS.null s ||
+        (IS.null (IS.getEQ (did, fid) s)) ||
+            (IS.null (IS.getEQ fn (IS.getEQ (did, fid) s))))
+
+-- Add to the SyncSet the new UniqueFile
+updateNewFile :: SyncSet -> UniqueFile -> SyncSet
+updateNewFile s u = IS.insert (UniqueStatus (u, New)) s
+
+-- Find the correct UniqueStatus, and Update it
+updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
+updateKnownFile s u@(UniqueFile fn fid did _ _) =
+    let setFile = IS.getOne (IS.getEQ fn (IS.getEQ (did, fid) s))
+    in case setFile of
+        Nothing -> updateNewFile s u
+        Just x  -> updateStatus s x
+    where
+        updateStatus :: SyncSet -> UniqueStatus -> SyncSet
+        updateStatus s x@(UniqueStatus (u, _)) = IS.insert (UniqueStatus (u, Seen)) (IS.delete x s)
 
 
 -- Looks like its time to reframe the design of the SyncSet
@@ -117,77 +163,12 @@ isNewFile (k, _, _) u@(UniqueFile _ fid did _ _) =
 --  So In ideal case you would not have hardlinks (symlinks perhaps, but that's a thronnier problem
 --      for latter anyway)
 
--- New Structure.
---
--- IxSet (deviceId) of IxSet (FileID) of (UniqueFile, Status), where Status = (Unseen, Seen, New)
---  Would probably want index on file id, then file name, for fast discovery for updating file status
---  and detection of new/seen files
---
--- Query Design:
---  - GroupBy (DeviceID, FileID) - Hardlink groups
---  - Update File Status - Find via "filename", confirm/match DeviceID+FileID then update status?
---  - GroupBy Status
---
---  IxSet (DeviceID, FileID), (FileName), (Status)
 
-
-
---
--- We have a UniqueFile in the IxSet that may have one or more "hardlinks"
--- We also have a UniqueFile (new?) that may have one or more "hardlinks"
---
--- We need to determite if its all entirely a new hardlinked file, if so add it to
--- new hardlink to known file.
---
--- Otherwise remove the relevant hardlink from the IxSet or the whole UniqueFile if it was
--- the whole thing.
---
--- 1. Detect what is new, store the subset that is new into "new hardlink IxSet"
--- 2. Remove UniqueFile out of IxSet
---  a. Remove known file out, if any left, reinsert into IxSet "known"
---  b. Otherwise leave it out?
-updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
-updateKnownFile (k, n, h) u@(UniqueFile _ fid did _ _) =
-    let setFile = IS.getOne (IS.getEQ fid (IS.getEQ did k))
-    in case setFile of
-        Nothing -> (k, n, (mergeHardlinkFile h u))
-        Just x  -> ((removeHardlinkFile k x u), n, (addHardlinkFile k x u))
-
--- Find the old hardlink and remove it, either remove the whole UniqueFile or part of it
-removeHardlinkFile :: IS.IxSet UniqueFile -> UniqueFile -> UniqueFile -> IS.IxSet UniqueFile
-removeHardlinkFile s u@(UniqueFile a b c d e) (UniqueFile x _ _ _ _) =
-    let keep = Set.difference a (Set.intersection a x)
-    in  if Set.null keep
-        then IS.delete u s
-        else IS.insert (UniqueFile keep b c d e) (IS.delete u s)
-
--- Finds the new hardlink then merge it into the new hardlink set
-addHardlinkFile :: IS.IxSet UniqueFile -> UniqueFile -> UniqueFile -> IS.IxSet UniqueFile
-addHardlinkFile s (UniqueFile a b c d e) (UniqueFile x _ _ _ _) =
-    let new = Set.difference x (Set.intersection x a)
-    in  if Set.null new
-        then s
-        else mergeHardlinkFile s (UniqueFile new b c d e)
-
-
-updateNewFile :: SyncSet -> UniqueFile -> SyncSet
-updateNewFile (k, n, h) u = (k, (mergeHardlinkFile n u), h)
-
--- Find a file in the IxSet and merge in the new hardlinked file
-mergeHardlinkFile :: IS.IxSet UniqueFile -> UniqueFile -> IS.IxSet UniqueFile
-mergeHardlinkFile s u@(UniqueFile _ fid did _ _) =
-    let setFile = IS.getOne (IS.getEQ fid (IS.getEQ did s))
-    in case setFile of
-        Nothing -> IS.insert u s
-        Just x  -> IS.insert (mergeUniqueFile x u) (IS.delete x s)
-    where
-        mergeUniqueFile :: UniqueFile -> UniqueFile -> UniqueFile
-        mergeUniqueFile (UniqueFile a b c d e) (UniqueFile x _ _ _ _) = UniqueFile (Set.union a x) b c d e
 
 -- Takes a list of FP.FilePath and convert it to real FilePath then fold over it and
 -- send it to directorySync where the real magic happens
 fileDirectorySync :: [FP.FilePath] -> IO SyncSet
-fileDirectorySync p = foldM directorySync (initSyncSet IS.empty) $ map decodeString p
+fileDirectorySync p = foldM directorySync (initSyncSet []) $ map decodeString p
 
 -- TODO: deal with file access, permission, symlink, hardlinks, etc
 directorySync :: SyncSet -> FilePath -> IO SyncSet
@@ -201,4 +182,4 @@ directorySync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
 
 fileSync :: SyncSet -> FilePath -> IO SyncSet
 fileSync s p = getSymbolicLinkStatus (encodeString p) >>= \fs ->
-    return $ updateSyncSet s $ UniqueFile (Set.fromList [p]) (fileID fs) (deviceID fs) (fileSize fs) Nothing
+    return $ updateSyncSet s $ UniqueFile p (fileID fs) (deviceID fs) (fileSize fs) Nothing
