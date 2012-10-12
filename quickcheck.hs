@@ -40,21 +40,21 @@ instance Arbitrary UniqueFile where
 
         return $ UniqueFile
             -- TODO: find a way to generate file path, maybe lists for hardlinks
-            (Set.fromList [decodeString filePath])
+            (decodeString filePath)
             (CIno fileID)
             (CDev deviceID)
             (COff fileSize)
             (Just fileHash)
 
-instance Arbitrary (IS.IxSet UniqueFile) where
+instance Arbitrary (IS.IxSet UniqueStatus) where
     arbitrary = do
         files <- listOf1 arbitrary
-        return (IS.fromList files)
+        return $ fromListSyncSet files
 
-instance Arbitrary (Set.Set FilePath) where
+instance Arbitrary FilePath where
     arbitrary = do
         filePath <- elements ["/home/foo0", "/tmp/bar.tar.gz", "/long/silly/[file]name.exe.jpg"]
-        return (Set.fromList [decodeString filePath])
+        return (decodeString filePath)
 
 hexChar :: Gen Char
 hexChar = oneof [ elements ['A'..'F'], elements ['0'..'9'] ]
@@ -81,114 +81,116 @@ sameDevice (UniqueFile _ _ b _ _) (UniqueFile _ _ y _ _) = b == y
 sameFile :: UniqueFile -> UniqueFile -> Bool
 sameFile (UniqueFile _ a _ _ _) (UniqueFile _ x _ _ _) = a == x
 
--- Merge in a UniqueFile with a provided Set of FilePaths
-mergedUniqueFile :: UniqueFile -> (Set.Set FilePath) -> UniqueFile
-mergedUniqueFile (UniqueFile a b c d e) x = UniqueFile (Set.union a x) b c d e
+sameFileName :: UniqueFile -> UniqueFile -> Bool
+sameFileName (UniqueFile a _ _ _ _) (UniqueFile x _ _ _ _) = (a == x)
 
 -- Replace UniqueFile's FilePath Set with provided one
-newUniqueFile :: UniqueFile -> (Set.Set FilePath) -> UniqueFile
+newUniqueFile :: UniqueFile -> FilePath -> UniqueFile
 newUniqueFile (UniqueFile _ b c d e) x = UniqueFile x b c d e
+
+-- TypeChecking this away for now
+mergedUniqueFile = undefined
+
+-- Generation of custon SyncSet
+fromPairsSyncSet :: [(UniqueFile, IxFileStatus)] -> SyncSet
+fromPairsSyncSet = IS.fromList . fmap (uncurry ((UniqueStatus .) . (,)))
 
 
 -- Properties: (init syncset)
 --  an Init SyncSet must always have the "known files" be populated
-prop_empty1_SyncSet = (initSyncSet $ IS.fromList []) == (IS.empty, IS.empty, IS.empty)
-prop_empty2_SyncSet = (initSyncSet $ IS.empty) == (IS.empty, IS.empty, IS.empty)
+prop_empty1_SyncSet = (initSyncSet []) == emptySyncSet
+prop_empty2_SyncSet = (emptySyncSet) == IS.empty
 
 --  it can be anything from nothing to thousands
-prop_arbitraryKnown_SyncSet xs = (initSyncSet xs) == (xs, IS.empty, IS.empty)
+prop_arbitraryKnown_SyncSet xs = (initSyncSet xs) == fromListSyncSet xs
 
 
 -- Properties: (isNewFile)
 --  If known file set is empty, it MUST always return true
-prop_isNewFile_Empty_SyncSet uf = (isNewFile (initSyncSet IS.empty) uf) == True
+prop_isNewFile_Empty_SyncSet uf = (isNewFile (emptySyncSet) uf) == True
 
 --  if device id does not exist in known set, it must always return true
 prop_isNewFile_unknownDeviceUnknownFile_SyncSet uf1 uf2 =
     not (sameDevice uf1 uf2) ==>
-        (isNewFile (initSyncSet $ IS.fromList [uf1]) uf2 == True)
+        (isNewFile (initSyncSet [uf1]) uf2 == True)
 
 --  if device id exist and file id does not exist it must return true
 prop_isNewFile_knownDeviceUnknownFile_SyncSet uf1 mock =
     not (sameFile uf1 mock) ==>
         let uf3 = mergeDeviceID uf1 mock
-        in (isNewFile (initSyncSet $ IS.fromList [uf1]) uf3 == True)
+        in (isNewFile (initSyncSet [uf1]) uf3 == True)
 
---  if device id exists and file id exists it must return false
---  TODO: hardlink dealing with here)
---  How do we want to deal with hardlinks here, IE do we just want to add the hardlink
---  to the known file or treat it like a new file?
+--  if device id exists and file id exists, but different filename return true
 prop_isNewFile_knownDeviceKnownFile_SyncSet uf1 mock =
-    let kdf = knownDeviceFile uf1 mock
-    in (isNewFile (initSyncSet $ IS.fromList [kdf]) uf1 == False)
+    not (sameFileName uf1 mock) ==>
+        let kdf = knownDeviceFile uf1 mock
+        in (isNewFile (initSyncSet [kdf]) uf1 == True)
+
+--  if device, file id and filename is the same, return false
+prop_isNewFile_knownDeviceKnownFileKnownName_SyncSet uf = isNewFile (initSyncSet [uf]) uf == False
 
 
 -- Properties: (updating new file)
 --  the new file must always have its entry added
-prop_newFile_Empty_SyncSet uf = (updateNewFile (initSyncSet IS.empty) uf) == (IS.empty, IS.fromList [uf], IS.empty)
-prop_newFile_SyncSet uf xs = (updateNewFile (initSyncSet xs) uf) == (xs, IS.fromList [uf], IS.empty)
+prop_newFile_Empty_SyncSet uf = (updateSyncSet (emptySyncSet) uf) == fromPairsSyncSet [(uf, New)]
+prop_newFile_SyncSet uf xs =
+    (isNewFile (initSyncSet xs) uf) ==>
+        (updateSyncSet (initSyncSet xs) uf) == fromPairsSyncSet ([(uf, New)] ++ [(x, Unseen) | x <- xs])
 
 --  Adding the same file must result in the same SyncSet
 prop_newFile_sameFile_SyncSet uf =
-    (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf) == (IS.empty, IS.fromList [uf], IS.empty)
+    (updateSyncSet (updateSyncSet (emptySyncSet) uf) uf) == fromPairsSyncSet [(uf, New)]
 
---  Adding a "Hardlink" (same file different filename) must result with both file merged in the SyncSet
-prop_newFile_hardLinkFile_SyncSet uf path =
-    let nhlf = mergedUniqueFile uf path
-        uf2  = newUniqueFile uf path
-    in (updateNewFile (updateNewFile (initSyncSet IS.empty) uf) uf2 == (IS.empty, IS.fromList [nhlf], IS.empty))
+--  Adding a "Hardlink" (same file different filename) must result with both file in the syncset
+prop_newFile_hardLinkFile_SyncSet uf1 path =
+    let uf2 = newUniqueFile uf1 path
+    in (updateSyncSet (updateSyncSet (emptySyncSet) uf1) uf2 == fromPairsSyncSet [(uf1, New), (uf2, New)])
 
---  Adding a duplicate filename (hardlink) to a pre-existing new unique file in syncset
-prop_newFile_duplicateHardLinkFile_SyncSet uf path =
-    let nhlf = mergedUniqueFile uf path
-        uf2  = newUniqueFile uf path
-    in (updateNewFile (updateNewFile (initSyncSet IS.empty) nhlf) uf2 == (IS.empty, IS.fromList [nhlf], IS.empty))
+-- TODO
+--  Adding the same file to the syncset that is already "known" ... (Does not support this)
 
 
 -- Properties: (update known file)
---  Removing a file from a empty syncset does not explode things
-prop_knownFile_emptyRemove kf1 =
-    let ss = initSyncSet $ IS.empty
-    in updateKnownFile ss kf1 == ss
-
 --  there must either be one less entry or a empty set
 prop_knownFile_alwaysRemove_SyncSet kf1 =
-    let ss = initSyncSet $ IS.fromList [kf1]
-    in updateKnownFile ss kf1 == (initSyncSet IS.empty)
+    let ss = initSyncSet [kf1]
+    in updateSyncSet ss kf1 == fromPairsSyncSet [(kf1, Seen)]
 
 --  The known file must always have its entry removed
+--  TODO: FAILABLE
 prop_knownFile_alwaysRemoveCorrectFile_SyncSet kf1 kf2 =
-    let ss = initSyncSet $ IS.fromList [kf1, kf2]
-    in updateKnownFile ss kf2 == (initSyncSet $ IS.fromList [kf1])
+    let ss = initSyncSet [kf1, kf2]
+    in updateSyncSet ss kf2 == fromPairsSyncSet [(kf1, Unseen), (kf2, Seen)]
 
 --  Removing the same file twice must be the same as removing it once
 prop_knownFile_removeTwice_SyncSet kf1 =
-    let ss = initSyncSet $ IS.fromList [kf1]
-    in updateKnownFile (updateKnownFile ss kf1) kf1 == (initSyncSet IS.empty)
+    let ss = initSyncSet [kf1]
+    in updateSyncSet (updateSyncSet ss kf1) kf1 == fromPairsSyncSet [(kf1, Seen)]
 
+-- TODO: FAILABLE
 prop_knownFile_removeOneFileTwice_SyncSet kf1 kf2 =
-    let ss = initSyncSet $ IS.fromList [kf1, kf2]
-    in updateKnownFile (updateKnownFile ss kf2) kf2 == (initSyncSet $ IS.fromList [kf1])
+    let ss = initSyncSet [kf1, kf2]
+    in updateSyncSet (updateSyncSet ss kf2) kf2 == fromPairsSyncSet [(kf1, Unseen), (kf2, Seen)]
 
 --  removing a hardlink must remove the correct file
 prop_knownFile_removeOneHardLinkFile_SyncSet kf1 mock_path =
     let kdf = mergedUniqueFile kf1 mock_path
         nkdf = newUniqueFile kf1 mock_path
-        ss = initSyncSet $ IS.fromList [kdf]
-    in updateKnownFile ss kf1 == (initSyncSet $ IS.fromList [nkdf])
+        ss = initSyncSet [kdf]
+    in updateSyncSet ss kf1 == (initSyncSet [nkdf])
 
 --  removing a hardlink twice must only remove the correct file and not the other file
 prop_knownFile_removeOneHardLinkFileTwice_SyncSet kf1 mock_path =
     let kdf = mergedUniqueFile kf1 mock_path
         nkdf = newUniqueFile kf1 mock_path
-        ss = initSyncSet $ IS.fromList [kdf]
-    in updateKnownFile (updateKnownFile ss kf1) kf1 == (initSyncSet $ IS.fromList [nkdf])
+        ss = initSyncSet [kdf]
+    in updateSyncSet (updateSyncSet ss kf1) kf1 == (initSyncSet [nkdf])
 
 
 -- Properties: (updating syncset)
 --  a file added MUST always be either removed from known set or added to new set
 -- updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
--- updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
+-- updateSyncSet s u = if isNewFile s u then updateSyncSet s u else updateSyncSet s u
 
 
 -- Test driver and stuff
@@ -196,7 +198,7 @@ prop_knownFile_removeOneHardLinkFileTwice_SyncSet kf1 mock_path =
 main :: IO ()
 main = sequence_ testlist
     where
-        arg      = stdArgs { maxSuccess=200 }
+        arg      = stdArgs { maxSuccess=1000 }
         testlist =
             [ myTest "empty SyncSet 1" prop_empty1_SyncSet
             , myTest "empty SyncSet 2" prop_empty2_SyncSet
@@ -206,15 +208,13 @@ main = sequence_ testlist
             , myTest "new file - unknown device & file" prop_isNewFile_unknownDeviceUnknownFile_SyncSet
             , myTest "new file - known device, unknown file" prop_isNewFile_knownDeviceUnknownFile_SyncSet
             , myTest "new file - known device & file" prop_isNewFile_knownDeviceKnownFile_SyncSet
-            -- TODO: Add new file hardlink handling here
+            , myTest "new file - known device & file & name" prop_isNewFile_knownDeviceKnownFileKnownName_SyncSet
 
             , myTest "add file" prop_newFile_Empty_SyncSet
             , myTest "add file - non-empty SyncSet" prop_newFile_SyncSet
             , myTest "add same file" prop_newFile_sameFile_SyncSet
             , myTest "add hardlinked file" prop_newFile_hardLinkFile_SyncSet
-            , myTest "add duplicate hardlinked file" prop_newFile_duplicateHardLinkFile_SyncSet
 
-            , myTest "remove file from empty set" prop_knownFile_emptyRemove
             , myTest "remove file" prop_knownFile_alwaysRemove_SyncSet
             , myTest "remove correct file" prop_knownFile_alwaysRemoveCorrectFile_SyncSet
             , myTest "remove twice" prop_knownFile_removeTwice_SyncSet

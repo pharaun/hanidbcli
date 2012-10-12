@@ -3,6 +3,7 @@ module HClient.Sync
     ( fileDirectorySync
     , UniqueFile(..)
     , UniqueStatus(..)
+    , IxFileStatus(..)
 
     -- SyncSet support
     , SyncSet
@@ -12,8 +13,6 @@ module HClient.Sync
     , updateSyncSet
     -- TODO: Add merging syncset support? Merging UniqueFile?
     , isNewFile
-    , updateKnownFile
-    , updateNewFile
     ) where
 
 import Data.Maybe (isNothing, fromJust)
@@ -102,7 +101,21 @@ initSyncSet = fromListSyncSet
 -- 1. If new file/hardlink, insert into the SyncSet as New
 -- 2. Otherwise, update the relevant file in the SyncSet to Seen
 updateSyncSet :: SyncSet -> UniqueFile -> SyncSet
-updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile s u
+updateSyncSet s u@(UniqueFile fn fid did _ _) =
+    let setFile = IS.getOne (IS.getEQ fn (IS.getEQ (did, fid) s))
+    in case setFile of
+        Nothing -> addNewFile s u
+        Just x  -> updateStatus s x
+    where
+        addNewFile :: SyncSet -> UniqueFile -> SyncSet
+        addNewFile s u = IS.insert (UniqueStatus (u, New)) s
+
+        -- Double check the status, make sure its not a New, if so ignore
+        updateStatus :: SyncSet -> UniqueStatus -> SyncSet
+        updateStatus sx x@(UniqueStatus (u, s))
+            | s == New  = sx
+            | otherwise = IS.insert (UniqueStatus (u, Seen)) (IS.delete x sx)
+
 
 -- Check to see if this UniqueFile is new to this SyncSet
 -- 1. Query to see if the (FileID, DeviceID) exists, if not, return True
@@ -111,25 +124,10 @@ updateSyncSet s u = if isNewFile s u then updateNewFile s u else updateKnownFile
 --
 -- TODO: Normalize the FilePath perhaps to help with indexing and matching on file path/name
 isNewFile :: SyncSet -> UniqueFile -> Bool
-isNewFile s u@(UniqueFile fn fid did _ _) = not (
+isNewFile s u@(UniqueFile fn fid did _ _) =
     IS.null s ||
         (IS.null (IS.getEQ (did, fid) s)) ||
-            (IS.null (IS.getEQ fn (IS.getEQ (did, fid) s))))
-
--- Add to the SyncSet the new UniqueFile
-updateNewFile :: SyncSet -> UniqueFile -> SyncSet
-updateNewFile s u = IS.insert (UniqueStatus (u, New)) s
-
--- Find the correct UniqueStatus, and Update it
-updateKnownFile :: SyncSet -> UniqueFile -> SyncSet
-updateKnownFile s u@(UniqueFile fn fid did _ _) =
-    let setFile = IS.getOne (IS.getEQ fn (IS.getEQ (did, fid) s))
-    in case setFile of
-        Nothing -> updateNewFile s u
-        Just x  -> updateStatus s x
-    where
-        updateStatus :: SyncSet -> UniqueStatus -> SyncSet
-        updateStatus s x@(UniqueStatus (u, _)) = IS.insert (UniqueStatus (u, Seen)) (IS.delete x s)
+            (IS.null (IS.getEQ fn (IS.getEQ (did, fid) s)))
 
 
 -- Looks like its time to reframe the design of the SyncSet
