@@ -9,9 +9,8 @@ module HClient.Sync
     , SyncSet
     , emptySyncSet
     , fromListSyncSet
-    , initSyncSet
+
     , updateSyncSet
-    -- TODO: Add merging syncset support? Merging UniqueFile?
     , isNewFile
     ) where
 
@@ -94,9 +93,6 @@ emptySyncSet = IS.empty
 fromListSyncSet :: [UniqueFile] -> SyncSet
 fromListSyncSet = IS.fromList . map (UniqueStatus . flip (,) Unseen)
 
--- TODO: Remove
-initSyncSet = fromListSyncSet
-
 -- Updates the SyncSet
 -- 1. If new file/hardlink, insert into the SyncSet as New
 -- 2. Otherwise, update the relevant file in the SyncSet to Seen
@@ -166,7 +162,7 @@ isNewFile s u@(UniqueFile fn fid did _ _) =
 -- Takes a list of FP.FilePath and convert it to real FilePath then fold over it and
 -- send it to directorySync where the real magic happens
 fileDirectorySync :: [FP.FilePath] -> IO SyncSet
-fileDirectorySync p = foldM directorySync (initSyncSet []) $ map decodeString p
+fileDirectorySync p = foldM directorySync (fromListSyncSet []) $ map decodeString p
 
 -- TODO: deal with file access, permission, symlink, hardlinks, etc
 directorySync :: SyncSet -> FilePath -> IO SyncSet

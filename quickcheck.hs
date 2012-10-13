@@ -98,11 +98,11 @@ fromPairsSyncSet = IS.fromList . fmap (uncurry ((UniqueStatus .) . (,)))
 
 -- Properties: (init syncset)
 --  an Init SyncSet must always have the "known files" be populated
-prop_empty1_SyncSet = (initSyncSet []) == emptySyncSet
+prop_empty1_SyncSet = (fromListSyncSet []) == emptySyncSet
 prop_empty2_SyncSet = (emptySyncSet) == IS.empty
 
 --  it can be anything from nothing to thousands
-prop_arbitraryKnown_SyncSet xs = (initSyncSet xs) == fromListSyncSet xs
+prop_arbitraryKnown_SyncSet xs = (fromListSyncSet xs) == fromListSyncSet xs
 
 
 -- Properties: (isNewFile)
@@ -112,30 +112,30 @@ prop_isNewFile_Empty_SyncSet uf = (isNewFile (emptySyncSet) uf) == True
 --  if device id does not exist in known set, it must always return true
 prop_isNewFile_unknownDeviceUnknownFile_SyncSet uf1 uf2 =
     not (sameDevice uf1 uf2) ==>
-        (isNewFile (initSyncSet [uf1]) uf2 == True)
+        (isNewFile (fromListSyncSet [uf1]) uf2 == True)
 
 --  if device id exist and file id does not exist it must return true
 prop_isNewFile_knownDeviceUnknownFile_SyncSet uf1 mock =
     not (sameFile uf1 mock) ==>
         let uf3 = mergeDeviceID uf1 mock
-        in (isNewFile (initSyncSet [uf1]) uf3 == True)
+        in (isNewFile (fromListSyncSet [uf1]) uf3 == True)
 
 --  if device id exists and file id exists, but different filename return true
 prop_isNewFile_knownDeviceKnownFile_SyncSet uf1 mock =
     not (sameFileName uf1 mock) ==>
         let kdf = knownDeviceFile uf1 mock
-        in (isNewFile (initSyncSet [kdf]) uf1 == True)
+        in (isNewFile (fromListSyncSet [kdf]) uf1 == True)
 
 --  if device, file id and filename is the same, return false
-prop_isNewFile_knownDeviceKnownFileKnownName_SyncSet uf = isNewFile (initSyncSet [uf]) uf == False
+prop_isNewFile_knownDeviceKnownFileKnownName_SyncSet uf = isNewFile (fromListSyncSet [uf]) uf == False
 
 
 -- Properties: (updating new file)
 --  the new file must always have its entry added
 prop_newFile_Empty_SyncSet uf = (updateSyncSet (emptySyncSet) uf) == fromPairsSyncSet [(uf, New)]
 prop_newFile_SyncSet uf xs =
-    (isNewFile (initSyncSet xs) uf) ==>
-        (updateSyncSet (initSyncSet xs) uf) == fromPairsSyncSet ([(uf, New)] ++ [(x, Unseen) | x <- xs])
+    (isNewFile (fromListSyncSet xs) uf) ==>
+        (updateSyncSet (fromListSyncSet xs) uf) == fromPairsSyncSet ([(uf, New)] ++ [(x, Unseen) | x <- xs])
 
 --  Adding the same file must result in the same SyncSet
 prop_newFile_sameFile_SyncSet uf =
@@ -153,38 +153,38 @@ prop_newFile_hardLinkFile_SyncSet uf1 path =
 -- Properties: (update known file)
 --  there must either be one less entry or a empty set
 prop_knownFile_alwaysRemove_SyncSet kf1 =
-    let ss = initSyncSet [kf1]
+    let ss = fromListSyncSet [kf1]
     in updateSyncSet ss kf1 == fromPairsSyncSet [(kf1, Seen)]
 
 --  The known file must always have its entry removed
 --  TODO: FAILABLE
 prop_knownFile_alwaysRemoveCorrectFile_SyncSet kf1 kf2 =
-    let ss = initSyncSet [kf1, kf2]
+    let ss = fromListSyncSet [kf1, kf2]
     in updateSyncSet ss kf2 == fromPairsSyncSet [(kf1, Unseen), (kf2, Seen)]
 
 --  Removing the same file twice must be the same as removing it once
 prop_knownFile_removeTwice_SyncSet kf1 =
-    let ss = initSyncSet [kf1]
+    let ss = fromListSyncSet [kf1]
     in updateSyncSet (updateSyncSet ss kf1) kf1 == fromPairsSyncSet [(kf1, Seen)]
 
 -- TODO: FAILABLE
 prop_knownFile_removeOneFileTwice_SyncSet kf1 kf2 =
-    let ss = initSyncSet [kf1, kf2]
+    let ss = fromListSyncSet [kf1, kf2]
     in updateSyncSet (updateSyncSet ss kf2) kf2 == fromPairsSyncSet [(kf1, Unseen), (kf2, Seen)]
 
 --  removing a hardlink must remove the correct file
 prop_knownFile_removeOneHardLinkFile_SyncSet kf1 mock_path =
     let kdf = mergedUniqueFile kf1 mock_path
         nkdf = newUniqueFile kf1 mock_path
-        ss = initSyncSet [kdf]
-    in updateSyncSet ss kf1 == (initSyncSet [nkdf])
+        ss = fromListSyncSet [kdf]
+    in updateSyncSet ss kf1 == (fromListSyncSet [nkdf])
 
 --  removing a hardlink twice must only remove the correct file and not the other file
 prop_knownFile_removeOneHardLinkFileTwice_SyncSet kf1 mock_path =
     let kdf = mergedUniqueFile kf1 mock_path
         nkdf = newUniqueFile kf1 mock_path
-        ss = initSyncSet [kdf]
-    in updateSyncSet (updateSyncSet ss kf1) kf1 == (initSyncSet [nkdf])
+        ss = fromListSyncSet [kdf]
+    in updateSyncSet (updateSyncSet ss kf1) kf1 == (fromListSyncSet [nkdf])
 
 
 -- Properties: (updating syncset)
