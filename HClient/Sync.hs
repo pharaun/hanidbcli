@@ -5,10 +5,18 @@ module HClient.Sync
     , UniqueStatus(..)
     , IxFileStatus(..)
 
+    -- Re-export?
+    , FileID
+    , DeviceID
+
+    -- Export these getter?
+    , getHash
+
     -- SyncSet support
     , SyncSet
     , emptySyncSet
     , fromListSyncSet
+    , groupByDeviceAndFile
 
     , updateSyncSet
     , isNewFile
@@ -64,6 +72,9 @@ getDeviceFileId (UniqueStatus ((UniqueFile _ fid did _ _), _)) = (did, fid)
 getFileName :: UniqueStatus -> FilePath
 getFileName (UniqueStatus ((UniqueFile fn _ _ _ _), _)) = fn
 
+getHash :: UniqueStatus -> Maybe String
+getHash (UniqueStatus ((UniqueFile _ _ _ _ h), _)) = h
+
 getStatus :: UniqueStatus -> IxFileStatus
 getStatus (UniqueStatus (_, s)) = s
 
@@ -80,7 +91,7 @@ instance IS.Indexable UniqueStatus where
     empty = IS.ixSet
         [ IS.ixFun $ \p -> [ getDeviceFileId p ]
         , IS.ixFun $ \p -> [ getFileName p ]
-        , IS.ixFun $ \p -> [ getStatus p ]
+        , IS.ixFun $ \p -> [ getStatus p ] -- May not even need this?, just pass the status on, keep this
         ]
 
 -- The IxSet... type alias
@@ -92,6 +103,10 @@ emptySyncSet = IS.empty
 -- Take a list of UniqueFile and initalizes it into a SyncSet with all of the status set to Unseen
 fromListSyncSet :: [UniqueFile] -> SyncSet
 fromListSyncSet = IS.fromList . map (UniqueStatus . flip (,) Unseen)
+
+-- Dump out the GroupBy of (DeviceID, FileID)
+groupByDeviceAndFile :: SyncSet -> [((DeviceID, FileID), [UniqueStatus])]
+groupByDeviceAndFile = IS.groupBy
 
 -- Updates the SyncSet
 -- 1. If new file/hardlink, insert into the SyncSet as New

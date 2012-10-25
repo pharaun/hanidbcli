@@ -39,7 +39,7 @@ data Options = Start
              | Stop { force :: Bool }
              | Hash { hashPaths :: [FilePath] }
              | Sync { syncPaths :: [FilePath] }
-             | Dupe { dupePaths :: [FilePath] }
+             | SyncHash { syncHashPaths :: [FilePath] }
              | Dump { cache :: Bool }
              | Status
              | List
@@ -58,10 +58,10 @@ sync = Sync
      { syncPaths = def &= args &= typ "PATHS"
      } &= help "Sync the meta-data store with the filesystem."
 
-dupe :: Options
-dupe = Dupe
-     { dupePaths = def &= args &= typ "PATHS"
-     } &= help "Check the meta-data and files on the filesystem for possible duplicates."
+syncHash :: Options
+syncHash = SyncHash
+     { syncHashPaths = def &= args &= typ "PATHS"
+     } &= help "Sync the meta-data with the filesystem then hash any new entry."
 
 dump :: Options
 dump = Dump
@@ -80,7 +80,7 @@ hash = Hash
      } &= help "Create one or more Ed2k file hash."
 
 optionMode :: Mode (CmdArgs Options)
-optionMode = cmdArgsMode $ modes [start, stop, hash, sync, dupe, dump, status, list]
+optionMode = cmdArgsMode $ modes [start, stop, hash, sync, syncHash, dump, status, list]
     &= program "hAnidbCli"
     &= summary "hAnidbCli v0.1"
     &= help "This is the prototype of the hAnidbCli client that interfaces to the AniDB and also manages your Anime media files."

@@ -1,14 +1,14 @@
 import HClient.Options
 import HClient.Hasher (fileDirectoryHash)
 import HClient.Sync (fileDirectorySync)
-import HClient.Dupes (detectDupes)
+import HClient.SyncHash (fileDirectorySyncHash)
 import System.Console.CmdArgs
 
 main :: IO ()
 main = parseOptions =<< cmdArgsRun optionMode
 
 parseOptions :: Options -> IO ()
-parseOptions (Hash x) = print =<< fileDirectoryHash x
-parseOptions (Sync x) = print =<< fileDirectorySync x
-parseOptions (Dupe x) = print =<< detectDupes =<< fileDirectorySync x
-parseOptions x        = print x
+parseOptions (Hash x)     = print =<< fileDirectoryHash x
+parseOptions (Sync x)     = print =<< fileDirectorySync x
+parseOptions (SyncHash x) = print =<< fileDirectorySyncHash x
+parseOptions x            = print x

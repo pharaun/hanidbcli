@@ -1,5 +1,6 @@
 module HClient.Hasher
     ( fileDirectoryHash
+    , fileHash
     , traditionalFileHash
     ) where
 
