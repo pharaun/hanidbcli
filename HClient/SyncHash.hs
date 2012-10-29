@@ -5,9 +5,10 @@ module HClient.SyncHash
 import HClient.Sync
 import HClient.Hasher
 
-import Control.Monad (foldM)
+import Control.Applicative ((<$>))
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Data (Data, Typeable)
-import Data.Maybe (isNothing, fromJust)
+import Data.Maybe (isNothing, catMaybes)
 import Prelude hiding (FilePath, catch)
 import qualified Data.IxSet as IS
 import qualified Data.List as L
@@ -15,7 +16,7 @@ import qualified Data.Set as Set
 import qualified System.IO as FP
 
 -- Conduit
-import Data.Conduit (($$), (=$), runResourceT, MonadResource, GSource, GInfConduit, awaitForever, yield)
+import Data.Conduit (($$), (=$), ($=), runResourceT, MonadResource, GSource, GInfConduit, awaitForever, yield, GInfSink)
 import qualified Data.Conduit.List as CL
 
 --  1. Acquire List of UniqueFile (Empty or acid-state)
@@ -44,7 +45,7 @@ fileDirectorySyncHash :: [FP.FilePath] -> IO String
 fileDirectorySyncHash xs = do
     -- SyncSet
     sync <- fileDirectorySync xs
-    a <- runResourceT $ (groupedSyncSetSource sync $$ CL.consume)
+    a <- runResourceT $ (groupedSyncSetSource sync $= cloneHashIfExists $$ generateHashAsNeeded =$ CL.consume)
     return $ show a
 
 -- Custom SyncSet groups Conduit Source
@@ -63,13 +64,30 @@ cloneHashIfExists = awaitForever $ (\i -> do
     -- Check if empty
     if L.null hasHash
     then yield noHash
-    else if (Set.size $ reduceHash hasHash) == 1
-        then yield $ ((applyHash noHash (head (Set.toList (reduceHash hasHash)))) ++ hasHash)
+    else let reduced = reduceHash hasHash
+        in if (Set.size reduced) == 1
+        then yield ((applyHash noHash $ head $ Set.toList reduced) ++ hasHash)
         else yield i -- TODO: Yield an error, something is not right here
     )
     where
         reduceHash :: [UniqueStatus] -> Set.Set String
-        reduceHash = undefined
+        reduceHash xs = Set.fromList $ catMaybes $ map getHash xs
 
-        applyHash :: [UniqueStatus] -> String -> [UniqueStatus]
-        applyHash = undefined
+-- Apply a generated hash to all UniqueStatus
+applyHash :: [UniqueStatus] -> String -> [UniqueStatus]
+applyHash xs s = map (\x -> setHash x s) xs
+
+-- Generate a hash for any UniqueFile that does not have a hash value
+generateHashAsNeeded :: MonadIO m => GInfConduit [UniqueStatus] m [UniqueStatus]
+generateHashAsNeeded = awaitForever $ (\i -> do
+    let (noHash, hasHash) = L.partition (\h -> isNothing (getHash h)) i
+
+    -- Check if empty
+    if L.null noHash
+    then yield hasHash
+    else (\x -> yield $ applyHash noHash $ snd $ head x)
+        =<< (liftIO $ fileHash $ getFileName $ head noHash) -- TODO: not safe with the head
+    )
+
+-- A Sink for dumping it out, probably have couple sinks that we can use such as
+-- acid-state, string/dump it out to the console, etc...

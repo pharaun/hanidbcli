@@ -11,6 +11,9 @@ module HClient.Sync
 
     -- Export these getter?
     , getHash
+    , setHash
+
+    , getFileName
 
     -- SyncSet support
     , SyncSet
@@ -74,6 +77,9 @@ getFileName (UniqueStatus ((UniqueFile fn _ _ _ _), _)) = fn
 
 getHash :: UniqueStatus -> Maybe String
 getHash (UniqueStatus ((UniqueFile _ _ _ _ h), _)) = h
+
+setHash :: UniqueStatus -> String -> UniqueStatus
+setHash (UniqueStatus ((UniqueFile a b c d _), f)) e = UniqueStatus ((UniqueFile a b c d (Just e)), f)
 
 getStatus :: UniqueStatus -> IxFileStatus
 getStatus (UniqueStatus (_, s)) = s
