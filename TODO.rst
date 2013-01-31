@@ -1,3 +1,5 @@
+A. add support for mp4/tagging support
+
 1. provide json output of the data from feeding a list of ed2k hashes to anidb and/or files
 2. look into some sort of local caching
 3. look into a simple console interface in which i type in request and it
